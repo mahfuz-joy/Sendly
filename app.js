@@ -1,14 +1,29 @@
+// Optimized Peer configuration with Google STUN servers for direct local routing
+const PEER_CONFIG = {
+  config: {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' }
+    ]
+  }
+};
+
 let peer = null;
 let activeConnection = null;
 let selectedFile = null;
-const CHUNK_SIZE = 64 * 1024; // 64 KB per chunk for high speed
 
-// Generate a random 6-digit numeric string
+// Optimal chunk size for WebRTC DataChannel (64 KB)
+const CHUNK_SIZE = 64 * 1024; 
+
+// Speed calculation variables
+let startTime = 0;
+let lastUpdate = 0;
+let lastBytes = 0;
+
 function generateSixDigitCode() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// Navigation helpers
 function showView(viewId) {
   ['view-home', 'view-send', 'view-receive'].forEach(id => {
     document.getElementById(id).classList.add('hidden');
@@ -24,7 +39,6 @@ function goHome() {
 function openReceiveView() {
   showView('view-receive');
   setupOtpInputs();
-  // Initialize peer with a random ID if not ready
   if (!peer) initReceiverPeer();
 }
 
@@ -37,16 +51,14 @@ function onFilePicked(event) {
   const code = generateSixDigitCode();
   const peerId = 'sendly-' + code;
 
-  // Destroy old peer instance if exists
   if (peer) peer.destroy();
 
-  peer = new Peer(peerId);
+  peer = new Peer(peerId, PEER_CONFIG);
 
   peer.on('open', () => {
     document.getElementById('display-code').innerText = code;
     showView('view-send');
 
-    // Generate QR Code
     const qrContainer = document.getElementById('qrcode');
     qrContainer.innerHTML = '';
     const shareUrl = `${window.location.origin}${window.location.pathname}?code=${code}`;
@@ -59,11 +71,10 @@ function onFilePicked(event) {
     });
   });
 
-  // When receiver connects to this sender
   peer.on('connection', (conn) => {
     activeConnection = conn;
     activeConnection.on('open', () => {
-      startStreamingFile(selectedFile);
+      startHighSpeedStream(selectedFile);
     });
   });
 }
@@ -78,7 +89,7 @@ function copyShareLink() {
 
 // --- RECEIVE FLOW ---
 function initReceiverPeer() {
-  peer = new Peer();
+  peer = new Peer(PEER_CONFIG);
 }
 
 function setupOtpInputs() {
@@ -120,9 +131,9 @@ function connectWithCode(customCode = null) {
 
   const targetPeerId = 'sendly-' + targetCode;
   showProgress();
-  updateProgress(0, 'Connecting to sender...');
+  updateProgress(0, 'Connecting directly...');
 
-  if (!peer) peer = new Peer();
+  if (!peer) peer = new Peer(PEER_CONFIG);
 
   peer.on('open', () => {
     makeCall(targetPeerId);
@@ -141,24 +152,39 @@ function makeCall(targetPeerId) {
   let receivedBytes = 0;
 
   activeConnection.on('open', () => {
-    updateProgress(0, 'Connected! Waiting for file...');
+    updateProgress(0, 'Connected! Waiting for transfer...');
   });
 
   activeConnection.on('data', (data) => {
+    const now = performance.now();
+
     if (data.type === 'meta') {
       meta = data;
       receivedChunks = [];
       receivedBytes = 0;
-      updateProgress(0, 'Receiving...');
+      startTime = now;
+      lastUpdate = now;
+      lastBytes = 0;
+      updateProgress(0, 'Starting download...');
     } else if (data.type === 'chunk') {
       receivedChunks.push(data.chunk);
       receivedBytes += data.chunk.byteLength;
+
+      // Speed calculation every 300ms
+      if (now - lastUpdate > 300) {
+        calculateSpeed(receivedBytes, meta.size, now);
+        lastUpdate = now;
+        lastBytes = receivedBytes;
+      }
 
       const progress = Math.min(100, Math.round((receivedBytes / meta.size) * 100));
       updateProgress(progress, 'Receiving...');
 
       if (receivedBytes >= meta.size) {
-        updateProgress(100, 'Saving file...');
+        updateProgress(100, 'Saving file to device...');
+        document.getElementById('transfer-speed').innerText = 'Complete';
+        document.getElementById('transfer-eta').innerText = '';
+
         const blob = new Blob(receivedChunks, { type: meta.fileType });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -168,16 +194,16 @@ function makeCall(targetPeerId) {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        updateProgress(100, 'Download Complete!');
+        updateProgress(100, 'Transfer Complete!');
       }
     }
   });
 }
 
-// Optimized File Sender with Backpressure Handling
-function startStreamingFile(file) {
+// Ultra Fast Stream with Flow Control
+async function startHighSpeedStream(file) {
   showProgress();
-  updateProgress(0, 'Sending details...');
+  updateProgress(0, 'Reading file...');
 
   activeConnection.send({
     type: 'meta',
@@ -186,40 +212,75 @@ function startStreamingFile(file) {
     fileType: file.type
   });
 
-  let offset = 0;
   const channel = activeConnection.dataChannel;
-  channel.bufferedAmountLowThreshold = 64 * 1024;
+  channel.binaryType = 'arraybuffer';
+  
+  // Backpressure watermark to prevent memory choking
+  channel.bufferedAmountLowThreshold = 256 * 1024; // 256 KB buffer
 
-  function pushChunk() {
+  let offset = 0;
+  startTime = performance.now();
+  lastUpdate = startTime;
+  lastBytes = 0;
+
+  function pushNextChunks() {
     while (offset < file.size) {
+      // Pause if buffer is getting full
       if (channel.bufferedAmount > channel.bufferedAmountLowThreshold) {
         channel.onbufferedamountlow = () => {
           channel.onbufferedamountlow = null;
-          pushChunk();
+          pushNextChunks();
         };
         return;
       }
 
       const slice = file.slice(offset, offset + CHUNK_SIZE);
-      const reader = new FileReader();
+      slice.arrayBuffer().then(buffer => {
+        if (channel.readyState === 'open') {
+          channel.send(buffer);
+        }
+      });
 
-      reader.onload = (e) => {
-        activeConnection.send({
-          type: 'chunk',
-          chunk: e.target.result
-        });
-      };
-
-      reader.readAsArrayBuffer(slice);
       offset += CHUNK_SIZE;
+
+      const now = performance.now();
+      if (now - lastUpdate > 300) {
+        calculateSpeed(offset, file.size, now);
+        lastUpdate = now;
+        lastBytes = offset;
+      }
 
       const progress = Math.min(100, Math.round((offset / file.size) * 100));
       updateProgress(progress, 'Sending...');
     }
+
     updateProgress(100, 'Sent Successfully!');
+    document.getElementById('transfer-speed').innerText = 'Complete';
+    document.getElementById('transfer-eta').innerText = '';
   }
 
-  pushChunk();
+  pushNextChunks();
+}
+
+// Speed & ETA Formatter
+function calculateSpeed(currentBytes, totalBytes, now) {
+  const timeDiff = (now - lastUpdate) / 1000;
+  const bytesDiff = currentBytes - lastBytes;
+  const speedBps = bytesDiff / timeDiff; // Bytes per second
+
+  let speedText = '';
+  if (speedBps > 1024 * 1024) {
+    speedText = (speedBps / (1024 * 1024)).toFixed(1) + ' MB/s';
+  } else {
+    speedText = (speedBps / 1024).toFixed(0) + ' KB/s';
+  }
+
+  const remainingBytes = totalBytes - currentBytes;
+  const remainingSeconds = speedBps > 0 ? Math.round(remainingBytes / speedBps) : 0;
+  const etaText = remainingSeconds > 0 ? `ETA: ${remainingSeconds}s` : 'ETA: calculating...';
+
+  document.getElementById('transfer-speed').innerText = speedText;
+  document.getElementById('transfer-eta').innerText = etaText;
 }
 
 function showProgress() {
@@ -232,7 +293,7 @@ function updateProgress(percent, label) {
   document.getElementById('transfer-status').innerText = label;
 }
 
-// Auto connect if URL has ?code=123456
+// Auto connect parameter handler
 window.addEventListener('DOMContentLoaded', () => {
   const urlParams = new URLSearchParams(window.location.search);
   const autoCode = urlParams.get('code');
