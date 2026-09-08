@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sendly - Direct File Transfer</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- PeerJS for WebRTC -->
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <!-- QRCode.js for generating QR codes -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+  <div class="card">
+    
+    <!-- VIEW 1: HOME SCREEN -->
+    <div id="view-home">
+      <div class="brand-icon">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="17 8 12 3 7 8"></polyline>
+          <line x1="12" y1="3" x2="12" y2="15"></line>
+        </svg>
+      </div>
+      <h1 class="brand-name">Sendly</h1>
+      <p class="tagline">Send files directly between devices.</p>
+
+      <input type="file" id="hidden-file-input" style="display: none;" onchange="onFilePicked(event)">
+      <button class="primary-btn" onclick="document.getElementById('hidden-file-input').click()">Send</button>
+      <button class="secondary-btn" onclick="openReceiveView()">Receive</button>
+
+      <p class="footer-note">Files transfer directly between your devices.</p>
+    </div>
+
+    <!-- VIEW 2: SEND / SHARE CODE -->
+    <div id="view-send" class="hidden">
+      <div class="view-header">
+        <button class="back-btn" onclick="goHome()">&#8249;</button>
+        <span class="header-title">SEND &mdash; SHARE CODE</span>
+      </div>
+
+      <div class="code-display-box">
+        <span id="display-code">------</span>
+      </div>
+
+      <div class="qr-wrapper">
+        <div id="qrcode"></div>
+      </div>
+
+      <button class="action-btn-outline" onclick="copyShareLink()">Copy Link</button>
+    </div>
+
+    <!-- VIEW 3: RECEIVE / ENTER CODE -->
+    <div id="view-receive" class="hidden">
+      <div class="view-header">
+        <button class="back-btn" onclick="goHome()">&#8249;</button>
+        <span class="header-title">RECEIVE &mdash; ENTER CODE</span>
+      </div>
+
+      <p class="input-instruction">ENTER CODE</p>
+      <div class="otp-container">
+        <input type="text" maxlength="1" class="otp-input" inputmode="numeric">
+        <input type="text" maxlength="1" class="otp-input" inputmode="numeric">
+        <input type="text" maxlength="1" class="otp-input" inputmode="numeric">
+        <input type="text" maxlength="1" class="otp-input" inputmode="numeric">
+        <input type="text" maxlength="1" class="otp-input" inputmode="numeric">
+        <input type="text" maxlength="1" class="otp-input" inputmode="numeric">
+      </div>
+
+      <button id="btn-connect" class="primary-btn" onclick="connectWithCode()" disabled>Connect</button>
+
+      <div class="separator-line"><span>or</span></div>
+
+      <button class="action-btn-outline" onclick="alert('Camera QR scan can be added with html5-qrcode library.')">Scan QR Code</button>
+    </div>
+
+    <!-- GLOBAL PROGRESS OVERLAY -->
+    <div id="progress-box" class="hidden">
+      <div class="progress-bar-bg">
+        <div id="progress-bar-fill"></div>
+      </div>
+      <div class="progress-info">
+        <span id="transfer-status">Transferring...</span>
+        <span id="transfer-percentage">0%</span>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
