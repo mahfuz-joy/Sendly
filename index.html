@@ -567,8 +567,10 @@
     let isCancelled = false;
     let isSender = false;
 
-    // 32 KB chunk size is universally optimal across Android, iOS and Desktop WebRTC SCTP
-    const CHUNK_SIZE = 32 * 1024;
+    // 64 KB is the maximum payload size for WebRTC SCTP frames without fragmentation
+    const CHUNK_SIZE = 64 * 1024;
+    // Read 2 MB memory batches from storage to eliminate disk I/O async lag
+    const BATCH_SIZE = 2 * 1024 * 1024;
 
     let speedTracker = {
       lastTime: 0,
@@ -901,46 +903,58 @@
         }
       };
 
-      // 256 KB threshold prevents memory choke while maintaining 40+ MB/s local WiFi throughput
-      rawDataChannel.bufferedAmountLowThreshold = 256 * 1024;
+      // 1 MB high-water threshold keeps network queue full without dropping frames
+      rawDataChannel.bufferedAmountLowThreshold = 1024 * 1024;
 
-      let offset = 0;
+      let fileOffset = 0;
       speedTracker.lastTime = performance.now();
       speedTracker.lastBytes = 0;
 
-      async function pushChunkStream() {
-        while (offset < file.size) {
+      async function pumpBatchedStream() {
+        while (fileOffset < file.size) {
           if (isCancelled) return;
 
-          // Backpressure loop: pause when socket buffer is saturated
-          if (rawDataChannel.bufferedAmount > rawDataChannel.bufferedAmountLowThreshold) {
-            rawDataChannel.onbufferedamountlow = () => {
-              rawDataChannel.onbufferedamountlow = null;
-              pushChunkStream();
-            };
-            return;
-          }
+          // Read a large 2 MB slice into memory once (drastically reduces Promise/IO overhead)
+          const batchEnd = Math.min(fileOffset + BATCH_SIZE, file.size);
+          const batchSlice = file.slice(fileOffset, batchEnd);
+          const batchBuffer = await batchSlice.arrayBuffer();
 
-          const slice = file.slice(offset, offset + CHUNK_SIZE);
-          const buffer = await slice.arrayBuffer();
+          let batchSubOffset = 0;
+          while (batchSubOffset < batchBuffer.byteLength) {
+            if (isCancelled) return;
 
-          if (rawDataChannel.readyState !== 'open') return;
+            // Flow control: wait only when socket queue exceeds 1 MB
+            if (rawDataChannel.bufferedAmount > rawDataChannel.bufferedAmountLowThreshold) {
+              await new Promise((resolve) => {
+                rawDataChannel.onbufferedamountlow = () => {
+                  rawDataChannel.onbufferedamountlow = null;
+                  resolve();
+                };
+              });
+            }
 
-          rawDataChannel.send(buffer);
-          offset += buffer.byteLength;
+            if (rawDataChannel.readyState !== 'open') return;
 
-          const now = performance.now();
-          if (now - speedTracker.lastTime > 200) {
-            updateSpeedMetrics(offset, file.size, now);
-            speedTracker.lastTime = now;
-            speedTracker.lastBytes = offset;
+            const sendEnd = Math.min(batchSubOffset + CHUNK_SIZE, batchBuffer.byteLength);
+            const chunk = batchBuffer.slice(batchSubOffset, sendEnd);
+            rawDataChannel.send(chunk);
+
+            batchSubOffset += chunk.byteLength;
+            fileOffset += chunk.byteLength;
+
+            const now = performance.now();
+            if (now - speedTracker.lastTime > 200) {
+              updateSpeedMetrics(fileOffset, file.size, now);
+              speedTracker.lastTime = now;
+              speedTracker.lastBytes = fileOffset;
+            }
           }
         }
 
         updateProgressHUD(99, 'Verifying with receiver...');
       }
 
-      pushChunkStream();
+      pumpBatchedStream();
     }
 
     function updateSpeedMetrics(currentBytes, totalBytes, now) {
