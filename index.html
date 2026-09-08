@@ -5,9 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sendly - Direct File Transfer</title>
   <link rel="stylesheet" href="style.css">
-  <!-- PeerJS for WebRTC -->
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <!-- QRCode.js for generating QR codes -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
 <body>
@@ -35,7 +33,7 @@
     <!-- VIEW 2: SEND / SHARE CODE -->
     <div id="view-send" class="hidden">
       <div class="view-header">
-        <button class="back-btn" onclick="goHome()">&#8249;</button>
+        <button class="back-btn" onclick="cancelAndReset()">&#8249;</button>
         <span class="header-title">SEND &mdash; SHARE CODE</span>
       </div>
 
@@ -48,12 +46,13 @@
       </div>
 
       <button class="action-btn-outline" onclick="copyShareLink()">Copy Link</button>
+      <button class="cancel-btn" onclick="cancelAndReset()">Cancel Transfer</button>
     </div>
 
     <!-- VIEW 3: RECEIVE / ENTER CODE -->
     <div id="view-receive" class="hidden">
       <div class="view-header">
-        <button class="back-btn" onclick="goHome()">&#8249;</button>
+        <button class="back-btn" onclick="cancelAndReset()">&#8249;</button>
         <span class="header-title">RECEIVE &mdash; ENTER CODE</span>
       </div>
 
@@ -71,19 +70,20 @@
 
       <div class="separator-line"><span>or</span></div>
 
-      <button class="action-btn-outline" onclick="alert('Camera QR scan can be added with html5-qrcode library.')">Scan QR Code</button>
+      <button class="action-btn-outline" onclick="alert('Camera scanner will be added soon. Use the 6 digit code for now.')">Scan QR Code</button>
+      <button class="cancel-btn" onclick="cancelAndReset()">Cancel</button>
     </div>
 
-<!-- GLOBAL PROGRESS OVERLAY -->
+    <!-- GLOBAL PROGRESS & SPEED OVERLAY -->
     <div id="progress-box" class="hidden">
       <div class="progress-bar-bg">
         <div id="progress-bar-fill"></div>
       </div>
       <div class="progress-info">
-        <span id="transfer-status">Transferring...</span>
+        <span id="transfer-status">Waiting...</span>
         <span id="transfer-percentage">0%</span>
       </div>
-      <div class="speed-info" style="font-size: 11px; color: #10b981; margin-top: 6px; display: flex; justify-content: space-between;">
+      <div class="speed-info">
         <span id="transfer-speed">0 KB/s</span>
         <span id="transfer-eta">ETA: --</span>
       </div>
