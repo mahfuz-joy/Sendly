@@ -4,11 +4,64 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sendly - Direct High-Speed File Transfer</title>
-  
-  <!-- Browser Favicon -->
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%235b68f6'><path d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12' stroke='%235b68f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>">
-  <!-- Mobile Home Screen Icon -->
-  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23141923'/><path d='M70 55v15a5 5 0 0 1-5 5H35a5 5 0 0 1-5-5V55M60 40l-10-10-10 10M50 30v30' stroke='%235b68f6' stroke-width='6' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>">
+
+  <!-- Generate Ultra-Sharp 512x512 PNG Icons to prevent blur -->
+  <script>
+    (function() {
+      const canvas = document.createElement('canvas');
+      canvas.width = 512;
+      canvas.height = 512;
+      const ctx = canvas.getContext('2d');
+
+      // Solid dark background
+      ctx.fillStyle = '#141923';
+      ctx.fillRect(0, 0, 512, 512);
+
+      // Rounded Indigo square
+      ctx.fillStyle = '#5b68f6';
+      ctx.beginPath();
+      if (ctx.roundRect) {
+        ctx.roundRect(64, 64, 384, 384, 80);
+      } else {
+        ctx.rect(64, 64, 384, 384);
+      }
+      ctx.fill();
+
+      // Sharp crisp white vector icon
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 32;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      ctx.beginPath();
+      // Arrow shaft & tip
+      ctx.moveTo(256, 160);
+      ctx.lineTo(256, 320);
+      ctx.moveTo(190, 226);
+      ctx.lineTo(256, 160);
+      ctx.lineTo(322, 226);
+
+      // Bottom tray
+      ctx.moveTo(170, 310);
+      ctx.lineTo(170, 350);
+      ctx.lineTo(342, 350);
+      ctx.lineTo(342, 310);
+      ctx.stroke();
+
+      const iconUrl = canvas.toDataURL('image/png');
+
+      const appleIcon = document.createElement('link');
+      appleIcon.rel = 'apple-touch-icon';
+      appleIcon.href = iconUrl;
+      document.head.appendChild(appleIcon);
+
+      const favIcon = document.createElement('link');
+      favIcon.rel = 'icon';
+      favIcon.type = 'image/png';
+      favIcon.href = iconUrl;
+      document.head.appendChild(favIcon);
+    })();
+  </script>
 
   <!-- PeerJS for WebRTC signaling -->
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
@@ -573,9 +626,9 @@
     let isCancelled = false;
     let isSender = false;
 
-    // 64 KB is the maximum payload size for WebRTC SCTP frames without fragmentation
+    // 64 KB SCTP frame size
     const CHUNK_SIZE = 64 * 1024;
-    // Read 2 MB memory batches from storage to eliminate disk I/O async lag
+    // 2 MB memory batching to prevent async bottleneck
     const BATCH_SIZE = 2 * 1024 * 1024;
 
     let speedTracker = {
@@ -634,7 +687,6 @@
     }
 
     function sendAnotherFile() {
-      // Return to home and open file picker right away
       cancelAndReset();
       setTimeout(() => {
         document.getElementById('hidden-file-input').click();
@@ -677,11 +729,9 @@
         });
       });
 
-      // When receiver dials in
       peer.on('connection', (conn) => {
         activeConnection = conn;
 
-        // Directly bind to raw RTCDataChannel to bypass library serialization bottleneck
         activeConnection.on('open', () => {
           rawDataChannel = activeConnection.dataChannel;
           rawDataChannel.binaryType = 'arraybuffer';
@@ -808,7 +858,6 @@
         if (isCancelled) return;
         const data = event.data;
 
-        // 1. Text payload represents control signals (meta or cancel)
         if (typeof data === 'string') {
           try {
             const msg = JSON.parse(data);
@@ -828,7 +877,6 @@
           return;
         }
 
-        // 2. Raw binary ArrayBuffer payload
         if (data instanceof ArrayBuffer && meta) {
           receivedChunks.push(data);
           receivedBytes += data.byteLength;
@@ -839,7 +887,6 @@
             speedTracker.lastTime = now;
             speedTracker.lastBytes = receivedBytes;
 
-            // Send sync progress tick back to sender so progress bars match 1:1
             try {
               rawDataChannel.send(JSON.stringify({
                 type: 'sync-ack',
@@ -851,11 +898,9 @@
           const progress = Math.min(99, Math.round((receivedBytes / meta.size) * 100));
           updateProgressHUD(progress, 'Receiving...');
 
-          // Transfer Complete on Receiver Side
           if (receivedBytes >= meta.size) {
             updateProgressHUD(100, 'Saving to device...');
 
-            // Notify sender that entire file has arrived safely
             try {
               rawDataChannel.send(JSON.stringify({ type: 'file-done' }));
             } catch (e) {}
@@ -882,7 +927,6 @@
     async function setupRawSenderChannel(file) {
       initTransferView('SENDING FILE', 'Preparing transfer...', 0, file.name, file.size);
 
-      // Send metadata first
       rawDataChannel.send(JSON.stringify({
         type: 'file-meta',
         name: file.name,
@@ -890,13 +934,11 @@
         fileType: file.type
       }));
 
-      // Listen for control & receiver progress sync acknowledgements
       rawDataChannel.onmessage = (event) => {
         if (typeof event.data === 'string') {
           try {
             const msg = JSON.parse(event.data);
             if (msg.type === 'sync-ack') {
-              // Exact progress match from receiver's actual disk/socket receipts
               const progress = Math.min(99, Math.round((msg.bytes / file.size) * 100));
               updateProgressHUD(progress, 'Sending file...');
             } else if (msg.type === 'file-done') {
@@ -909,7 +951,6 @@
         }
       };
 
-      // 1 MB high-water threshold keeps network queue full without dropping frames
       rawDataChannel.bufferedAmountLowThreshold = 1024 * 1024;
 
       let fileOffset = 0;
@@ -920,7 +961,6 @@
         while (fileOffset < file.size) {
           if (isCancelled) return;
 
-          // Read a large 2 MB slice into memory once (drastically reduces Promise/IO overhead)
           const batchEnd = Math.min(fileOffset + BATCH_SIZE, file.size);
           const batchSlice = file.slice(fileOffset, batchEnd);
           const batchBuffer = await batchSlice.arrayBuffer();
@@ -929,7 +969,6 @@
           while (batchSubOffset < batchBuffer.byteLength) {
             if (isCancelled) return;
 
-            // Flow control: wait only when socket queue exceeds 1 MB
             if (rawDataChannel.bufferedAmount > rawDataChannel.bufferedAmountLowThreshold) {
               await new Promise((resolve) => {
                 rawDataChannel.onbufferedamountlow = () => {
