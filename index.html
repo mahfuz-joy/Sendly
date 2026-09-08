@@ -74,7 +74,7 @@
       <button class="action-btn-outline" onclick="alert('Camera QR scan can be added with html5-qrcode library.')">Scan QR Code</button>
     </div>
 
-    <!-- GLOBAL PROGRESS OVERLAY -->
+<!-- GLOBAL PROGRESS OVERLAY -->
     <div id="progress-box" class="hidden">
       <div class="progress-bar-bg">
         <div id="progress-bar-fill"></div>
@@ -82,6 +82,10 @@
       <div class="progress-info">
         <span id="transfer-status">Transferring...</span>
         <span id="transfer-percentage">0%</span>
+      </div>
+      <div class="speed-info" style="font-size: 11px; color: #10b981; margin-top: 6px; display: flex; justify-content: space-between;">
+        <span id="transfer-speed">0 KB/s</span>
+        <span id="transfer-eta">ETA: --</span>
       </div>
     </div>
 
