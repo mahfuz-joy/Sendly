@@ -4,13 +4,356 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sendly - Direct File Transfer</title>
-  <link rel="stylesheet" href="style.css">
+  <!-- PeerJS for WebRTC DataChannel P2P connections -->
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <!-- QRCode.js for generating instant shareable QR code -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    }
+
+    body {
+      background-color: #0b0e14;
+      color: #f1f5f9;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+
+    .card {
+      background: #141923;
+      border: 1px solid #1e2638;
+      border-radius: 20px;
+      width: 100%;
+      max-width: 390px;
+      padding: 30px 24px;
+      text-align: center;
+      box-shadow: 0 20px 45px rgba(0, 0, 0, 0.65);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .brand-icon {
+      width: 60px;
+      height: 60px;
+      background: #5b68f6;
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 8px auto 18px;
+      color: #ffffff;
+      box-shadow: 0 10px 25px rgba(91, 104, 246, 0.35);
+    }
+
+    .brand-name {
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+      margin-bottom: 6px;
+      color: #ffffff;
+    }
+
+    .tagline {
+      color: #7b8a9e;
+      font-size: 14px;
+      margin-bottom: 28px;
+    }
+
+    .primary-btn {
+      width: 100%;
+      background: #5b68f6;
+      color: white;
+      border: none;
+      padding: 14px;
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-bottom: 12px;
+      transition: all 0.2s ease;
+      display: block;
+    }
+
+    .primary-btn:hover:not(:disabled) {
+      background: #4c58e8;
+      transform: translateY(-1px);
+    }
+
+    .primary-btn:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
+    .secondary-btn {
+      width: 100%;
+      background: #1b2232;
+      color: #ffffff;
+      border: 1px solid #28344c;
+      padding: 14px;
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-bottom: 24px;
+      transition: all 0.2s ease;
+      display: block;
+    }
+
+    .secondary-btn:hover {
+      background: #232c3f;
+      border-color: #384663;
+    }
+
+    .footer-note {
+      font-size: 12px;
+      color: #617085;
+    }
+
+    .view-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .back-btn {
+      background: transparent;
+      border: none;
+      color: #8b9bb4;
+      font-size: 24px;
+      cursor: pointer;
+      line-height: 1;
+      padding: 4px;
+      border-radius: 8px;
+      transition: color 0.2s;
+    }
+
+    .back-btn:hover {
+      color: #ffffff;
+    }
+
+    .header-title {
+      font-size: 11px;
+      letter-spacing: 1.5px;
+      font-weight: 700;
+      color: #72849e;
+      text-transform: uppercase;
+    }
+
+    .code-display-box {
+      background: #0d1118;
+      border: 1px solid #1a2230;
+      border-radius: 14px;
+      padding: 22px 10px;
+      margin-bottom: 18px;
+    }
+
+    #display-code {
+      font-size: 36px;
+      font-weight: 800;
+      letter-spacing: 8px;
+      color: #ffffff;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .qr-wrapper {
+      background: #ffffff;
+      border-radius: 16px;
+      padding: 16px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin-bottom: 18px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    }
+
+    #qrcode {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 160px;
+      min-width: 160px;
+    }
+
+    #qrcode img {
+      margin: 0 auto;
+      border-radius: 4px;
+    }
+
+    .action-btn-outline {
+      width: 100%;
+      background: #1b2232;
+      color: #ffffff;
+      border: 1px solid #28344c;
+      padding: 13px;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .action-btn-outline:hover {
+      background: #232c3f;
+    }
+
+    .cancel-btn {
+      width: 100%;
+      background: transparent;
+      color: #ef4444;
+      border: 1px solid #5f1b1b;
+      padding: 12px;
+      border-radius: 12px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 10px;
+      transition: all 0.2s;
+    }
+
+    .cancel-btn:hover {
+      background: rgba(239, 68, 68, 0.12);
+      border-color: #ef4444;
+    }
+
+    .input-instruction {
+      text-align: left;
+      font-size: 11px;
+      letter-spacing: 1.2px;
+      font-weight: 700;
+      color: #72849e;
+      margin-bottom: 14px;
+    }
+
+    .otp-container {
+      display: flex;
+      justify-content: space-between;
+      gap: 6px;
+      margin-bottom: 24px;
+    }
+
+    .otp-input {
+      width: 48px;
+      height: 56px;
+      background: #0d1118;
+      border: 1px solid #232c3d;
+      border-radius: 10px;
+      color: #ffffff;
+      text-align: center;
+      font-size: 22px;
+      font-weight: 700;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .otp-input:focus {
+      border-color: #5b68f6;
+      box-shadow: 0 0 0 2px rgba(91, 104, 246, 0.25);
+    }
+
+    .separator-line {
+      display: flex;
+      align-items: center;
+      text-align: center;
+      margin: 18px 0;
+      color: #4b5563;
+      font-size: 12px;
+    }
+
+    .separator-line::before,
+    .separator-line::after {
+      content: '';
+      flex: 1;
+      border-bottom: 1px solid #1f283a;
+    }
+
+    .separator-line span {
+      padding: 0 10px;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    /* High Performance Progress & Transfer HUD */
+    #progress-box {
+      margin-top: 20px;
+      padding: 14px;
+      background: #0d1118;
+      border: 1px solid #1e2638;
+      border-radius: 12px;
+      text-align: left;
+    }
+
+    .progress-bar-bg {
+      width: 100%;
+      height: 8px;
+      background: #1b2232;
+      border-radius: 6px;
+      overflow: hidden;
+      margin-bottom: 8px;
+    }
+
+    #progress-bar-fill {
+      width: 0%;
+      height: 100%;
+      background: #10b981;
+      transition: width 0.15s ease-out;
+    }
+
+    .progress-info {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      font-weight: 600;
+      color: #cbd5e1;
+    }
+
+    .speed-info {
+      font-size: 11px;
+      color: #10b981;
+      margin-top: 6px;
+      display: flex;
+      justify-content: space-between;
+      font-weight: 600;
+    }
+
+    /* Modal Toast Notification (replaces alert) */
+    .toast-msg {
+      position: absolute;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1e293b;
+      color: #f8fafc;
+      border: 1px solid #334155;
+      padding: 10px 18px;
+      border-radius: 20px;
+      font-size: 13px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      z-index: 100;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+      opacity: 0;
+    }
+    .toast-msg.show {
+      opacity: 1;
+    }
+  </style>
 </head>
 <body>
+
   <div class="card">
-    
+    <div id="toast" class="toast-msg"></div>
+
     <!-- VIEW 1: HOME SCREEN -->
     <div id="view-home">
       <div class="brand-icon">
@@ -70,27 +413,411 @@
 
       <div class="separator-line"><span>or</span></div>
 
-      <button class="action-btn-outline" onclick="alert('Camera scanner will be added soon. Use the 6 digit code for now.')">Scan QR Code</button>
+      <button class="action-btn-outline" onclick="showToast('Enter the 6-digit code shown on the sender screen.')">Scan QR Code</button>
       <button class="cancel-btn" onclick="cancelAndReset()">Cancel</button>
     </div>
 
-    <!-- GLOBAL PROGRESS & SPEED OVERLAY -->
+    <!-- GLOBAL PROGRESS & SPEED HUD -->
     <div id="progress-box" class="hidden">
       <div class="progress-bar-bg">
         <div id="progress-bar-fill"></div>
       </div>
       <div class="progress-info">
-        <span id="transfer-status">Waiting...</span>
+        <span id="transfer-status">Connecting...</span>
         <span id="transfer-percentage">0%</span>
       </div>
       <div class="speed-info">
-        <span id="transfer-speed">0 KB/s</span>
-        <span id="transfer-eta">ETA: --</span>
+        <span id="transfer-speed">0.0 MB/s</span>
+        <span id="transfer-eta">ETA: calculating...</span>
       </div>
     </div>
 
   </div>
 
-  <script src="app.js"></script>
+  <script>
+    // Optimized direct STUN server configuration
+    const PEER_CONFIG = {
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+      }
+    };
+
+    let peer = null;
+    let activeConnection = null;
+    let selectedFile = null;
+    let isCancelled = false;
+
+    // 64 KB is optimal for raw ArrayBuffer DataChannel streaming
+    const CHUNK_SIZE = 64 * 1024;
+
+    // Speed tracking metrics
+    let speedMetrics = {
+      lastTime: 0,
+      lastBytes: 0
+    };
+
+    function showToast(message) {
+      const toast = document.getElementById('toast');
+      toast.innerText = message;
+      toast.classList.add('show');
+      setTimeout(() => {
+        toast.classList.remove('show');
+      }, 2500);
+    }
+
+    function generateSixDigitCode() {
+      return Math.floor(100000 + Math.random() * 900000).toString();
+    }
+
+    function showView(viewId) {
+      ['view-home', 'view-send', 'view-receive'].forEach(id => {
+        document.getElementById(id).classList.add('hidden');
+      });
+      document.getElementById(viewId).classList.remove('hidden');
+    }
+
+    function cancelAndReset() {
+      isCancelled = true;
+      if (activeConnection) {
+        try {
+          activeConnection.send(JSON.stringify({ type: 'cancelled' }));
+          activeConnection.close();
+        } catch (e) {}
+        activeConnection = null;
+      }
+      if (peer) {
+        peer.destroy();
+        peer = null;
+      }
+      selectedFile = null;
+      document.getElementById('progress-box').classList.add('hidden');
+      document.getElementById('hidden-file-input').value = '';
+      showView('view-home');
+    }
+
+    function openReceiveView() {
+      showView('view-receive');
+      setupOtpInputs();
+      if (!peer) initReceiverPeer();
+    }
+
+    function onFilePicked(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      selectedFile = file;
+      isCancelled = false;
+
+      const code = generateSixDigitCode();
+      const peerId = 'sendly-' + code;
+
+      if (peer) peer.destroy();
+      peer = new Peer(peerId, PEER_CONFIG);
+
+      peer.on('open', () => {
+        document.getElementById('display-code').innerText = code;
+        showView('view-send');
+
+        const qrContainer = document.getElementById('qrcode');
+        qrContainer.innerHTML = '';
+        const shareUrl = `${window.location.origin}${window.location.pathname}?code=${code}`;
+        new QRCode(qrContainer, {
+          text: shareUrl,
+          width: 160,
+          height: 160,
+          colorDark: '#000000',
+          colorLight: '#ffffff'
+        });
+      });
+
+      peer.on('connection', (conn) => {
+        activeConnection = conn;
+
+        // Use arraybuffer for maximum throughput
+        activeConnection.on('open', () => {
+          if (activeConnection.dataChannel) {
+            activeConnection.dataChannel.binaryType = 'arraybuffer';
+          }
+          startFastSenderPipeline(selectedFile);
+        });
+
+        activeConnection.on('data', (data) => {
+          if (typeof data === 'string') {
+            try {
+              const msg = JSON.parse(data);
+              if (msg.type === 'transfer-complete') {
+                updateProgress(100, 'Delivered successfully!');
+                document.getElementById('transfer-speed').innerText = 'Complete';
+                document.getElementById('transfer-eta').innerText = '';
+              } else if (msg.type === 'cancelled') {
+                showToast('Receiver cancelled the transfer.');
+                cancelAndReset();
+              }
+            } catch (err) {}
+          }
+        });
+      });
+    }
+
+    function copyShareLink() {
+      const code = document.getElementById('display-code').innerText;
+      const shareUrl = `${window.location.origin}${window.location.pathname}?code=${code}`;
+      
+      // Fallback-safe clipboard copy
+      const tempInput = document.createElement('input');
+      tempInput.value = shareUrl;
+      document.body.appendChild(tempInput);
+      tempInput.select();
+      try {
+        document.execCommand('copy');
+        showToast('Share link copied!');
+      } catch (e) {
+        showToast('Could not copy link automatically.');
+      }
+      document.body.removeChild(tempInput);
+    }
+
+    function initReceiverPeer() {
+      peer = new Peer(PEER_CONFIG);
+    }
+
+    function setupOtpInputs() {
+      const inputs = document.querySelectorAll('.otp-input');
+      inputs.forEach((input, idx) => {
+        input.value = '';
+        input.oninput = (e) => {
+          if (e.target.value.length === 1 && idx < inputs.length - 1) {
+            inputs[idx + 1].focus();
+          }
+          checkOtpFilled();
+        };
+        input.onkeydown = (e) => {
+          if (e.key === 'Backspace' && !e.target.value && idx > 0) {
+            inputs[idx - 1].focus();
+          }
+        };
+      });
+      inputs[0].focus();
+    }
+
+    function checkOtpFilled() {
+      const inputs = document.querySelectorAll('.otp-input');
+      let fullCode = '';
+      inputs.forEach(i => fullCode += i.value);
+      document.getElementById('btn-connect').disabled = fullCode.length !== 6;
+    }
+
+    function connectWithCode(customCode = null) {
+      let targetCode = customCode;
+      if (!targetCode) {
+        const inputs = document.querySelectorAll('.otp-input');
+        targetCode = '';
+        inputs.forEach(i => targetCode += i.value);
+      }
+
+      if (targetCode.length !== 6) return;
+      isCancelled = false;
+
+      const targetPeerId = 'sendly-' + targetCode;
+      showProgress();
+      updateProgress(0, 'Connecting directly...');
+
+      if (!peer) peer = new Peer(PEER_CONFIG);
+
+      peer.on('open', () => {
+        makeCall(targetPeerId);
+      });
+
+      if (peer.id) {
+        makeCall(targetPeerId);
+      }
+    }
+
+    function makeCall(targetPeerId) {
+      activeConnection = peer.connect(targetPeerId, { reliable: true });
+
+      let receivedChunks = [];
+      let meta = null;
+      let receivedBytes = 0;
+
+      speedMetrics.lastTime = performance.now();
+      speedMetrics.lastBytes = 0;
+
+      activeConnection.on('open', () => {
+        if (activeConnection.dataChannel) {
+          activeConnection.dataChannel.binaryType = 'arraybuffer';
+        }
+        updateProgress(0, 'Connected. Waiting for file...');
+      });
+
+      activeConnection.on('data', (data) => {
+        if (isCancelled) return;
+
+        // Metadata / Control Packet
+        if (typeof data === 'string') {
+          try {
+            const msg = JSON.parse(data);
+            if (msg.type === 'meta') {
+              meta = msg;
+              receivedChunks = [];
+              receivedBytes = 0;
+              speedMetrics.lastTime = performance.now();
+              speedMetrics.lastBytes = 0;
+              updateProgress(0, 'Receiving: ' + meta.name);
+            } else if (msg.type === 'cancelled') {
+              showToast('Sender cancelled the transfer.');
+              cancelAndReset();
+            }
+          } catch (err) {}
+          return;
+        }
+
+        // Raw ArrayBuffer Data Chunk
+        if (data instanceof ArrayBuffer && meta) {
+          receivedChunks.push(data);
+          receivedBytes += data.byteLength;
+
+          const now = performance.now();
+          if (now - speedMetrics.lastTime > 250) {
+            updateSpeedUI(receivedBytes, meta.size, now);
+            speedMetrics.lastTime = now;
+            speedMetrics.lastBytes = receivedBytes;
+          }
+
+          const progress = Math.min(99, Math.round((receivedBytes / meta.size) * 100));
+          updateProgress(progress, 'Receiving...');
+
+          // Transfer Complete
+          if (receivedBytes >= meta.size) {
+            updateProgress(100, 'Saving to device...');
+            document.getElementById('transfer-speed').innerText = 'Complete';
+            document.getElementById('transfer-eta').innerText = '';
+
+            try {
+              activeConnection.send(JSON.stringify({ type: 'transfer-complete' }));
+            } catch (e) {}
+
+            const blob = new Blob(receivedChunks, { type: meta.fileType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = meta.name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            updateProgress(100, 'Download Complete!');
+          }
+        }
+      });
+    }
+
+    async function startFastSenderPipeline(file) {
+      showProgress();
+      updateProgress(0, 'Preparing transmission...');
+
+      // Send metadata first
+      activeConnection.send(JSON.stringify({
+        type: 'meta',
+        name: file.name,
+        size: file.size,
+        fileType: file.type
+      }));
+
+      const channel = activeConnection.dataChannel;
+      channel.binaryType = 'arraybuffer';
+      channel.bufferedAmountLowThreshold = 512 * 1024; // 512 KB threshold for max throughput
+
+      let offset = 0;
+      speedMetrics.lastTime = performance.now();
+      speedMetrics.lastBytes = 0;
+
+      async function pushNextChunk() {
+        while (offset < file.size) {
+          if (isCancelled) return;
+
+          // Backpressure pause
+          if (channel.bufferedAmount > channel.bufferedAmountLowThreshold) {
+            channel.onbufferedamountlow = () => {
+              channel.onbufferedamountlow = null;
+              pushNextChunk();
+            };
+            return;
+          }
+
+          const slice = file.slice(offset, offset + CHUNK_SIZE);
+          const buffer = await slice.arrayBuffer();
+
+          if (channel.readyState !== 'open') return;
+
+          channel.send(buffer);
+          offset += buffer.byteLength;
+
+          const now = performance.now();
+          if (now - speedMetrics.lastTime > 250) {
+            updateSpeedUI(offset, file.size, now);
+            speedMetrics.lastTime = now;
+            speedMetrics.lastBytes = offset;
+          }
+
+          const progress = Math.min(99, Math.round((offset / file.size) * 100));
+          updateProgress(progress, 'Sending file...');
+        }
+
+        updateProgress(99, 'Waiting for receiver confirmation...');
+      }
+
+      pushNextChunk();
+    }
+
+    function updateSpeedUI(currentBytes, totalBytes, now) {
+      const timeDiff = (now - speedMetrics.lastTime) / 1000;
+      if (timeDiff <= 0) return;
+
+      const bytesDiff = currentBytes - speedMetrics.lastBytes;
+      const speedBps = bytesDiff / timeDiff;
+
+      let speedText = '0.0 MB/s';
+      if (speedBps >= 1024 * 1024) {
+        speedText = (speedBps / (1024 * 1024)).toFixed(1) + ' MB/s';
+      } else if (speedBps > 0) {
+        speedText = (speedBps / 1024).toFixed(0) + ' KB/s';
+      }
+
+      const remainingBytes = totalBytes - currentBytes;
+      const remainingSecs = speedBps > 0 ? Math.round(remainingBytes / speedBps) : 0;
+      const etaText = remainingSecs > 0 ? `ETA: ${remainingSecs}s` : 'ETA: finalizing...';
+
+      document.getElementById('transfer-speed').innerText = speedText;
+      document.getElementById('transfer-eta').innerText = etaText;
+    }
+
+    function showProgress() {
+      document.getElementById('progress-box').classList.remove('hidden');
+    }
+
+    function updateProgress(percent, label) {
+      document.getElementById('progress-bar-fill').style.width = percent + '%';
+      document.getElementById('transfer-percentage').innerText = percent + '%';
+      document.getElementById('transfer-status').innerText = label;
+    }
+
+    // Auto-connect when URL contains ?code=
+    window.addEventListener('DOMContentLoaded', () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const autoCode = urlParams.get('code');
+      if (autoCode && autoCode.length === 6) {
+        openReceiveView();
+        const inputs = document.querySelectorAll('.otp-input');
+        autoCode.split('').forEach((digit, idx) => {
+          if (inputs[idx]) inputs[idx].value = digit;
+        });
+        connectWithCode(autoCode);
+      }
+    });
+  </script>
 </body>
 </html>
