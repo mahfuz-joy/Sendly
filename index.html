@@ -5,61 +5,86 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sendly - Direct High-Speed File Transfer</title>
 
-  <!-- Generate Ultra-Sharp 512x512 PNG Icons to prevent blur -->
+  <!-- PWA Theme Meta -->
+  <meta name="theme-color" content="#5b68f6">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+  <!-- Professional Edge-to-Edge Adaptive Icon Script -->
   <script>
     (function() {
+      // 1. Draw a full-bleed premium gradient app icon
       const canvas = document.createElement('canvas');
       canvas.width = 512;
       canvas.height = 512;
       const ctx = canvas.getContext('2d');
 
-      // Solid dark background
-      ctx.fillStyle = '#141923';
+      // Modern smooth gradient background that fills 100% of the icon frame
+      const grad = ctx.createLinearGradient(0, 0, 512, 512);
+      grad.addColorStop(0, '#6366f1');
+      grad.addColorStop(1, '#4338ca');
+      ctx.fillStyle = grad;
       ctx.fillRect(0, 0, 512, 512);
 
-      // Rounded Indigo square
-      ctx.fillStyle = '#5b68f6';
+      // Clean, modern Sendly Paperplane Vector in center
+      ctx.fillStyle = '#ffffff';
       ctx.beginPath();
-      if (ctx.roundRect) {
-        ctx.roundRect(64, 64, 384, 384, 80);
-      } else {
-        ctx.rect(64, 64, 384, 384);
-      }
+      // Precise paperplane polygon centered in 512x512 with safe padding
+      ctx.moveTo(140, 246);
+      ctx.lineTo(372, 140);
+      ctx.lineTo(266, 372);
+      ctx.lineTo(224, 288);
+      ctx.closePath();
       ctx.fill();
 
-      // Sharp crisp white vector icon
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 32;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-
+      // Fold shadow for depth
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.12)';
       ctx.beginPath();
-      // Arrow shaft & tip
-      ctx.moveTo(256, 160);
-      ctx.lineTo(256, 320);
-      ctx.moveTo(190, 226);
-      ctx.lineTo(256, 160);
-      ctx.lineTo(322, 226);
-
-      // Bottom tray
-      ctx.moveTo(170, 310);
-      ctx.lineTo(170, 350);
-      ctx.lineTo(342, 350);
-      ctx.lineTo(342, 310);
-      ctx.stroke();
+      ctx.moveTo(372, 140);
+      ctx.lineTo(224, 288);
+      ctx.lineTo(252, 252);
+      ctx.closePath();
+      ctx.fill();
 
       const iconUrl = canvas.toDataURL('image/png');
 
-      const appleIcon = document.createElement('link');
-      appleIcon.rel = 'apple-touch-icon';
-      appleIcon.href = iconUrl;
-      document.head.appendChild(appleIcon);
+      // 2. Set Favicon & Apple Touch Icon
+      const fav = document.createElement('link');
+      fav.rel = 'icon';
+      fav.type = 'image/png';
+      fav.href = iconUrl;
+      document.head.appendChild(fav);
 
-      const favIcon = document.createElement('link');
-      favIcon.rel = 'icon';
-      favIcon.type = 'image/png';
-      favIcon.href = iconUrl;
-      document.head.appendChild(favIcon);
+      const apple = document.createElement('link');
+      apple.rel = 'apple-touch-icon';
+      apple.href = iconUrl;
+      document.head.appendChild(apple);
+
+      // 3. Inject Inline Web App Manifest with 'maskable' purpose to remove grey border on Android
+      const manifestObj = {
+        name: 'Sendly',
+        short_name: 'Sendly',
+        start_url: './',
+        display: 'standalone',
+        background_color: '#0b0e14',
+        theme_color: '#5b68f6',
+        icons: [
+          {
+            src: iconUrl,
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any maskable'
+          }
+        ]
+      };
+
+      const manifestBlob = new Blob([JSON.stringify(manifestObj)], { type: 'application/json' });
+      const manifestUrl = URL.createObjectURL(manifestBlob);
+      const manifestLink = document.createElement('link');
+      manifestLink.rel = 'manifest';
+      manifestLink.href = manifestUrl;
+      document.head.appendChild(manifestLink);
     })();
   </script>
 
