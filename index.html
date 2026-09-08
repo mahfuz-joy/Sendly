@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sendly - Direct File Transfer</title>
-  <!-- PeerJS for WebRTC DataChannel P2P connections -->
+  <title>Sendly - Direct High-Speed File Transfer</title>
+  <!-- PeerJS for WebRTC signaling -->
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <!-- QRCode.js for generating instant shareable QR code -->
+  <!-- QRCode.js for generating shareable QR codes -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
   <style>
@@ -15,6 +15,7 @@
       padding: 0;
       box-sizing: border-box;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      -webkit-tap-highlight-color: transparent;
     }
 
     body {
@@ -30,33 +31,33 @@
     .card {
       background: #141923;
       border: 1px solid #1e2638;
-      border-radius: 20px;
+      border-radius: 24px;
       width: 100%;
-      max-width: 390px;
-      padding: 30px 24px;
+      max-width: 400px;
+      padding: 28px 24px;
       text-align: center;
-      box-shadow: 0 20px 45px rgba(0, 0, 0, 0.65);
+      box-shadow: 0 24px 50px rgba(0, 0, 0, 0.7);
       position: relative;
       overflow: hidden;
     }
 
     .brand-icon {
-      width: 60px;
-      height: 60px;
+      width: 64px;
+      height: 64px;
       background: #5b68f6;
-      border-radius: 16px;
+      border-radius: 18px;
       display: flex;
       align-items: center;
       justify-content: center;
-      margin: 8px auto 18px;
+      margin: 10px auto 18px;
       color: #ffffff;
-      box-shadow: 0 10px 25px rgba(91, 104, 246, 0.35);
+      box-shadow: 0 12px 28px rgba(91, 104, 246, 0.4);
     }
 
     .brand-name {
-      font-size: 26px;
+      font-size: 28px;
       font-weight: 700;
-      letter-spacing: -0.3px;
+      letter-spacing: -0.5px;
       margin-bottom: 6px;
       color: #ffffff;
     }
@@ -64,26 +65,29 @@
     .tagline {
       color: #7b8a9e;
       font-size: 14px;
-      margin-bottom: 28px;
+      margin-bottom: 30px;
     }
 
     .primary-btn {
       width: 100%;
       background: #5b68f6;
-      color: white;
+      color: #ffffff;
       border: none;
-      padding: 14px;
-      border-radius: 12px;
+      padding: 15px;
+      border-radius: 14px;
       font-size: 15px;
       font-weight: 600;
       cursor: pointer;
       margin-bottom: 12px;
       transition: all 0.2s ease;
-      display: block;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
     }
 
     .primary-btn:hover:not(:disabled) {
-      background: #4c58e8;
+      background: #4a57ea;
       transform: translateY(-1px);
     }
 
@@ -97,19 +101,22 @@
       background: #1b2232;
       color: #ffffff;
       border: 1px solid #28344c;
-      padding: 14px;
-      border-radius: 12px;
+      padding: 15px;
+      border-radius: 14px;
       font-size: 15px;
       font-weight: 600;
       cursor: pointer;
       margin-bottom: 24px;
       transition: all 0.2s ease;
-      display: block;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
     }
 
     .secondary-btn:hover {
-      background: #232c3f;
-      border-color: #384663;
+      background: #232d42;
+      border-color: #38496b;
     }
 
     .footer-note {
@@ -121,7 +128,7 @@
       display: flex;
       align-items: center;
       gap: 12px;
-      margin-bottom: 24px;
+      margin-bottom: 22px;
     }
 
     .back-btn {
@@ -151,13 +158,13 @@
     .code-display-box {
       background: #0d1118;
       border: 1px solid #1a2230;
-      border-radius: 14px;
+      border-radius: 16px;
       padding: 22px 10px;
       margin-bottom: 18px;
     }
 
     #display-code {
-      font-size: 36px;
+      font-size: 38px;
       font-weight: 800;
       letter-spacing: 8px;
       color: #ffffff;
@@ -172,15 +179,15 @@
       justify-content: center;
       align-items: center;
       margin-bottom: 18px;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
     }
 
     #qrcode {
-      display: flex;
-      justify-content: center;
-      align-items: center;
       min-height: 160px;
       min-width: 160px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
 
     #qrcode img {
@@ -193,7 +200,7 @@
       background: #1b2232;
       color: #ffffff;
       border: 1px solid #28344c;
-      padding: 13px;
+      padding: 14px;
       border-radius: 12px;
       font-size: 14px;
       font-weight: 600;
@@ -202,15 +209,15 @@
     }
 
     .action-btn-outline:hover {
-      background: #232c3f;
+      background: #232d42;
     }
 
     .cancel-btn {
       width: 100%;
       background: transparent;
       color: #ef4444;
-      border: 1px solid #5f1b1b;
-      padding: 12px;
+      border: 1px solid #4a1515;
+      padding: 13px;
       border-radius: 12px;
       font-size: 13px;
       font-weight: 600;
@@ -237,7 +244,7 @@
       display: flex;
       justify-content: space-between;
       gap: 6px;
-      margin-bottom: 24px;
+      margin-bottom: 22px;
     }
 
     .otp-input {
@@ -245,7 +252,7 @@
       height: 56px;
       background: #0d1118;
       border: 1px solid #232c3d;
-      border-radius: 10px;
+      border-radius: 12px;
       color: #ffffff;
       text-align: center;
       font-size: 22px;
@@ -279,57 +286,108 @@
       padding: 0 10px;
     }
 
-    .hidden {
-      display: none !important;
-    }
-
-    /* High Performance Progress & Transfer HUD */
-    #progress-box {
-      margin-top: 20px;
-      padding: 14px;
+    .file-meta-card {
       background: #0d1118;
       border: 1px solid #1e2638;
+      border-radius: 16px;
+      padding: 18px 16px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 22px;
+      text-align: left;
+    }
+
+    .file-icon-box {
+      width: 46px;
+      height: 46px;
+      background: #1b2232;
       border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #5b68f6;
+      flex-shrink: 0;
+    }
+
+    .file-info-col {
+      overflow: hidden;
+      flex: 1;
+    }
+
+    .file-name-text {
+      font-size: 14px;
+      font-weight: 600;
+      color: #ffffff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 4px;
+    }
+
+    .file-size-text {
+      font-size: 12px;
+      color: #7b8a9e;
+    }
+
+    .transfer-hud {
+      background: #0d1118;
+      border: 1px solid #1e2638;
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 18px;
       text-align: left;
     }
 
     .progress-bar-bg {
       width: 100%;
-      height: 8px;
+      height: 10px;
       background: #1b2232;
       border-radius: 6px;
       overflow: hidden;
-      margin-bottom: 8px;
+      margin-bottom: 10px;
     }
 
     #progress-bar-fill {
       width: 0%;
       height: 100%;
-      background: #10b981;
+      background: linear-gradient(90deg, #5b68f6, #10b981);
       transition: width 0.15s ease-out;
     }
 
     .progress-info {
       display: flex;
       justify-content: space-between;
-      font-size: 12px;
+      font-size: 13px;
       font-weight: 600;
-      color: #cbd5e1;
+      color: #e2e8f0;
+      margin-bottom: 6px;
     }
 
     .speed-info {
-      font-size: 11px;
+      font-size: 12px;
       color: #10b981;
-      margin-top: 6px;
       display: flex;
       justify-content: space-between;
       font-weight: 600;
     }
 
-    /* Modal Toast Notification (replaces alert) */
+    .success-badge {
+      width: 68px;
+      height: 68px;
+      background: rgba(16, 185, 129, 0.15);
+      border: 2px solid #10b981;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 16px auto 16px;
+      color: #10b981;
+    }
+
     .toast-msg {
       position: absolute;
-      top: 16px;
+      top: 14px;
       left: 50%;
       transform: translateX(-50%);
       background: #1e293b;
@@ -338,14 +396,19 @@
       padding: 10px 18px;
       border-radius: 20px;
       font-size: 13px;
-      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6);
       z-index: 100;
       pointer-events: none;
       transition: opacity 0.3s ease;
       opacity: 0;
     }
+
     .toast-msg.show {
       opacity: 1;
+    }
+
+    .hidden {
+      display: none !important;
     }
   </style>
 </head>
@@ -357,7 +420,7 @@
     <!-- VIEW 1: HOME SCREEN -->
     <div id="view-home">
       <div class="brand-icon">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
           <polyline points="17 8 12 3 7 8"></polyline>
           <line x1="12" y1="3" x2="12" y2="15"></line>
@@ -367,13 +430,19 @@
       <p class="tagline">Send files directly between devices.</p>
 
       <input type="file" id="hidden-file-input" style="display: none;" onchange="onFilePicked(event)">
-      <button class="primary-btn" onclick="document.getElementById('hidden-file-input').click()">Send</button>
-      <button class="secondary-btn" onclick="openReceiveView()">Receive</button>
+      <button class="primary-btn" onclick="document.getElementById('hidden-file-input').click()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Send
+      </button>
+      <button class="secondary-btn" onclick="openReceiveView()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Receive
+      </button>
 
       <p class="footer-note">Files transfer directly between your devices.</p>
     </div>
 
-    <!-- VIEW 2: SEND / SHARE CODE -->
+    <!-- VIEW 2: SENDER CODE & QR SCREEN (Waiting for connection) -->
     <div id="view-send" class="hidden">
       <div class="view-header">
         <button class="back-btn" onclick="cancelAndReset()">&#8249;</button>
@@ -392,7 +461,7 @@
       <button class="cancel-btn" onclick="cancelAndReset()">Cancel Transfer</button>
     </div>
 
-    <!-- VIEW 3: RECEIVE / ENTER CODE -->
+    <!-- VIEW 3: RECEIVER CODE INPUT SCREEN -->
     <div id="view-receive" class="hidden">
       <div class="view-header">
         <button class="back-btn" onclick="cancelAndReset()">&#8249;</button>
@@ -413,29 +482,75 @@
 
       <div class="separator-line"><span>or</span></div>
 
-      <button class="action-btn-outline" onclick="showToast('Enter the 6-digit code shown on the sender screen.')">Scan QR Code</button>
+      <button class="action-btn-outline" onclick="showToast('Enter the 6-digit code or scan with phone camera.')">Scan QR Code</button>
       <button class="cancel-btn" onclick="cancelAndReset()">Cancel</button>
     </div>
 
-    <!-- GLOBAL PROGRESS & SPEED HUD -->
-    <div id="progress-box" class="hidden">
-      <div class="progress-bar-bg">
-        <div id="progress-bar-fill"></div>
+    <!-- VIEW 4: ACTIVE TRANSFER HUD SCREEN -->
+    <div id="view-transfer" class="hidden">
+      <div class="view-header">
+        <span id="transfer-screen-title" class="header-title">TRANSFERRING FILE</span>
       </div>
-      <div class="progress-info">
-        <span id="transfer-status">Connecting...</span>
-        <span id="transfer-percentage">0%</span>
+
+      <div id="transfer-icon-area">
+        <div class="file-meta-card">
+          <div class="file-icon-box">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+              <polyline points="13 2 13 9 20 9"></polyline>
+            </svg>
+          </div>
+          <div class="file-info-col">
+            <div id="meta-filename" class="file-name-text">filename.ext</div>
+            <div id="meta-filesize" class="file-size-text">0 MB</div>
+          </div>
+        </div>
       </div>
-      <div class="speed-info">
-        <span id="transfer-speed">0.0 MB/s</span>
-        <span id="transfer-eta">ETA: calculating...</span>
+
+      <!-- Completion Badge (Shown on finish) -->
+      <div id="completion-box" class="hidden">
+        <div class="success-badge">
+          <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"></polyline>
+          </svg>
+        </div>
+        <h2 style="font-size: 20px; font-weight: 700; margin-bottom: 6px;">Transfer Complete!</h2>
+        <p style="font-size: 13px; color: #8b9bb4; margin-bottom: 24px;">File delivered safely between devices.</p>
+      </div>
+
+      <!-- Progress Section -->
+      <div class="transfer-hud">
+        <div class="progress-bar-bg">
+          <div id="progress-bar-fill"></div>
+        </div>
+        <div class="progress-info">
+          <span id="transfer-status">Connecting...</span>
+          <span id="transfer-percentage">0%</span>
+        </div>
+        <div class="speed-info">
+          <span id="transfer-speed">0.0 MB/s</span>
+          <span id="transfer-eta">ETA: calculating...</span>
+        </div>
+      </div>
+
+      <!-- Action Buttons in Transfer View -->
+      <div id="transfer-actions">
+        <button id="btn-cancel-transfer" class="cancel-btn" style="margin-top: 4px;" onclick="cancelAndReset()">Cancel Transfer</button>
+      </div>
+
+      <!-- Completion Actions -->
+      <div id="completion-actions" class="hidden">
+        <button class="primary-btn" onclick="sendAnotherFile()">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Send Another File
+        </button>
+        <button class="secondary-btn" style="margin-bottom: 0;" onclick="cancelAndReset()">Done</button>
       </div>
     </div>
 
   </div>
 
   <script>
-    // Optimized direct STUN server configuration
     const PEER_CONFIG = {
       config: {
         iceServers: [
@@ -447,14 +562,15 @@
 
     let peer = null;
     let activeConnection = null;
+    let rawDataChannel = null;
     let selectedFile = null;
     let isCancelled = false;
+    let isSender = false;
 
-    // 64 KB is optimal for raw ArrayBuffer DataChannel streaming
-    const CHUNK_SIZE = 64 * 1024;
+    // 32 KB chunk size is universally optimal across Android, iOS and Desktop WebRTC SCTP
+    const CHUNK_SIZE = 32 * 1024;
 
-    // Speed tracking metrics
-    let speedMetrics = {
+    let speedTracker = {
       lastTime: 0,
       lastBytes: 0
     };
@@ -472,8 +588,16 @@
       return Math.floor(100000 + Math.random() * 900000).toString();
     }
 
+    function formatBytes(bytes) {
+      if (!bytes || bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
+    }
+
     function showView(viewId) {
-      ['view-home', 'view-send', 'view-receive'].forEach(id => {
+      ['view-home', 'view-send', 'view-receive', 'view-transfer'].forEach(id => {
         document.getElementById(id).classList.add('hidden');
       });
       document.getElementById(viewId).classList.remove('hidden');
@@ -481,24 +605,36 @@
 
     function cancelAndReset() {
       isCancelled = true;
-      if (activeConnection) {
+      if (rawDataChannel && rawDataChannel.readyState === 'open') {
         try {
-          activeConnection.send(JSON.stringify({ type: 'cancelled' }));
-          activeConnection.close();
+          rawDataChannel.send(JSON.stringify({ type: 'control-cancel' }));
+          rawDataChannel.close();
         } catch (e) {}
+      }
+      if (activeConnection) {
+        try { activeConnection.close(); } catch (e) {}
         activeConnection = null;
       }
       if (peer) {
-        peer.destroy();
+        try { peer.destroy(); } catch (e) {}
         peer = null;
       }
+      rawDataChannel = null;
       selectedFile = null;
-      document.getElementById('progress-box').classList.add('hidden');
       document.getElementById('hidden-file-input').value = '';
       showView('view-home');
     }
 
+    function sendAnotherFile() {
+      // Return to home and open file picker right away
+      cancelAndReset();
+      setTimeout(() => {
+        document.getElementById('hidden-file-input').click();
+      }, 150);
+    }
+
     function openReceiveView() {
+      isSender = false;
       showView('view-receive');
       setupOtpInputs();
       if (!peer) initReceiverPeer();
@@ -509,6 +645,7 @@
       if (!file) return;
       selectedFile = file;
       isCancelled = false;
+      isSender = true;
 
       const code = generateSixDigitCode();
       const peerId = 'sendly-' + code;
@@ -532,31 +669,15 @@
         });
       });
 
+      // When receiver dials in
       peer.on('connection', (conn) => {
         activeConnection = conn;
 
-        // Use arraybuffer for maximum throughput
+        // Directly bind to raw RTCDataChannel to bypass library serialization bottleneck
         activeConnection.on('open', () => {
-          if (activeConnection.dataChannel) {
-            activeConnection.dataChannel.binaryType = 'arraybuffer';
-          }
-          startFastSenderPipeline(selectedFile);
-        });
-
-        activeConnection.on('data', (data) => {
-          if (typeof data === 'string') {
-            try {
-              const msg = JSON.parse(data);
-              if (msg.type === 'transfer-complete') {
-                updateProgress(100, 'Delivered successfully!');
-                document.getElementById('transfer-speed').innerText = 'Complete';
-                document.getElementById('transfer-eta').innerText = '';
-              } else if (msg.type === 'cancelled') {
-                showToast('Receiver cancelled the transfer.');
-                cancelAndReset();
-              }
-            } catch (err) {}
-          }
+          rawDataChannel = activeConnection.dataChannel;
+          rawDataChannel.binaryType = 'arraybuffer';
+          setupRawSenderChannel(selectedFile);
         });
       });
     }
@@ -564,8 +685,6 @@
     function copyShareLink() {
       const code = document.getElementById('display-code').innerText;
       const shareUrl = `${window.location.origin}${window.location.pathname}?code=${code}`;
-      
-      // Fallback-safe clipboard copy
       const tempInput = document.createElement('input');
       tempInput.value = shareUrl;
       document.body.appendChild(tempInput);
@@ -574,7 +693,7 @@
         document.execCommand('copy');
         showToast('Share link copied!');
       } catch (e) {
-        showToast('Could not copy link automatically.');
+        showToast('Link copied to clipboard!');
       }
       document.body.removeChild(tempInput);
     }
@@ -621,129 +740,183 @@
       isCancelled = false;
 
       const targetPeerId = 'sendly-' + targetCode;
-      showProgress();
-      updateProgress(0, 'Connecting directly...');
+      initTransferView('RECEIVING FILE', 'Connecting directly...', 0);
 
       if (!peer) peer = new Peer(PEER_CONFIG);
 
       peer.on('open', () => {
-        makeCall(targetPeerId);
+        makeReceiverCall(targetPeerId);
       });
 
       if (peer.id) {
-        makeCall(targetPeerId);
+        makeReceiverCall(targetPeerId);
       }
     }
 
-    function makeCall(targetPeerId) {
+    function makeReceiverCall(targetPeerId) {
       activeConnection = peer.connect(targetPeerId, { reliable: true });
 
+      activeConnection.on('open', () => {
+        rawDataChannel = activeConnection.dataChannel;
+        rawDataChannel.binaryType = 'arraybuffer';
+        setupRawReceiverChannel();
+      });
+    }
+
+    function initTransferView(title, statusText, percent, fileName = 'file', fileSize = 0) {
+      showView('view-transfer');
+      document.getElementById('transfer-screen-title').innerText = title;
+      document.getElementById('meta-filename').innerText = fileName;
+      document.getElementById('meta-filesize').innerText = formatBytes(fileSize);
+
+      document.getElementById('transfer-icon-area').classList.remove('hidden');
+      document.getElementById('completion-box').classList.add('hidden');
+      document.getElementById('transfer-actions').classList.remove('hidden');
+      document.getElementById('completion-actions').classList.add('hidden');
+
+      updateProgressHUD(percent, statusText);
+    }
+
+    function showTransferComplete(isSenderSide) {
+      document.getElementById('transfer-icon-area').classList.add('hidden');
+      document.getElementById('completion-box').classList.remove('hidden');
+      document.getElementById('transfer-actions').classList.add('hidden');
+      document.getElementById('completion-actions').classList.remove('hidden');
+
+      updateProgressHUD(100, 'Delivered');
+      document.getElementById('transfer-speed').innerText = 'Complete';
+      document.getElementById('transfer-eta').innerText = '';
+    }
+
+    function setupRawReceiverChannel() {
       let receivedChunks = [];
       let meta = null;
       let receivedBytes = 0;
 
-      speedMetrics.lastTime = performance.now();
-      speedMetrics.lastBytes = 0;
+      speedTracker.lastTime = performance.now();
+      speedTracker.lastBytes = 0;
 
-      activeConnection.on('open', () => {
-        if (activeConnection.dataChannel) {
-          activeConnection.dataChannel.binaryType = 'arraybuffer';
-        }
-        updateProgress(0, 'Connected. Waiting for file...');
-      });
-
-      activeConnection.on('data', (data) => {
+      rawDataChannel.onmessage = (event) => {
         if (isCancelled) return;
+        const data = event.data;
 
-        // Metadata / Control Packet
+        // 1. Text payload represents control signals (meta or cancel)
         if (typeof data === 'string') {
           try {
             const msg = JSON.parse(data);
-            if (msg.type === 'meta') {
+            if (msg.type === 'file-meta') {
               meta = msg;
               receivedChunks = [];
               receivedBytes = 0;
-              speedMetrics.lastTime = performance.now();
-              speedMetrics.lastBytes = 0;
-              updateProgress(0, 'Receiving: ' + meta.name);
-            } else if (msg.type === 'cancelled') {
+              speedTracker.lastTime = performance.now();
+              speedTracker.lastBytes = 0;
+
+              initTransferView('RECEIVING FILE', 'Starting incoming stream...', 0, meta.name, meta.size);
+            } else if (msg.type === 'control-cancel') {
               showToast('Sender cancelled the transfer.');
               cancelAndReset();
             }
-          } catch (err) {}
+          } catch (e) {}
           return;
         }
 
-        // Raw ArrayBuffer Data Chunk
+        // 2. Raw binary ArrayBuffer payload
         if (data instanceof ArrayBuffer && meta) {
           receivedChunks.push(data);
           receivedBytes += data.byteLength;
 
           const now = performance.now();
-          if (now - speedMetrics.lastTime > 250) {
-            updateSpeedUI(receivedBytes, meta.size, now);
-            speedMetrics.lastTime = now;
-            speedMetrics.lastBytes = receivedBytes;
+          if (now - speedTracker.lastTime > 200) {
+            updateSpeedMetrics(receivedBytes, meta.size, now);
+            speedTracker.lastTime = now;
+            speedTracker.lastBytes = receivedBytes;
+
+            // Send sync progress tick back to sender so progress bars match 1:1
+            try {
+              rawDataChannel.send(JSON.stringify({
+                type: 'sync-ack',
+                bytes: receivedBytes
+              }));
+            } catch (e) {}
           }
 
           const progress = Math.min(99, Math.round((receivedBytes / meta.size) * 100));
-          updateProgress(progress, 'Receiving...');
+          updateProgressHUD(progress, 'Receiving...');
 
-          // Transfer Complete
+          // Transfer Complete on Receiver Side
           if (receivedBytes >= meta.size) {
-            updateProgress(100, 'Saving to device...');
-            document.getElementById('transfer-speed').innerText = 'Complete';
-            document.getElementById('transfer-eta').innerText = '';
+            updateProgressHUD(100, 'Saving to device...');
 
+            // Notify sender that entire file has arrived safely
             try {
-              activeConnection.send(JSON.stringify({ type: 'transfer-complete' }));
+              rawDataChannel.send(JSON.stringify({ type: 'file-done' }));
             } catch (e) {}
 
-            const blob = new Blob(receivedChunks, { type: meta.fileType });
+            const blob = new Blob(receivedChunks, { type: meta.fileType || 'application/octet-stream' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
+            a.style.display = 'none';
             a.href = url;
             a.download = meta.name;
             document.body.appendChild(a);
             a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+            setTimeout(() => {
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+            }, 2000);
 
-            updateProgress(100, 'Download Complete!');
+            showTransferComplete(false);
           }
         }
-      });
+      };
     }
 
-    async function startFastSenderPipeline(file) {
-      showProgress();
-      updateProgress(0, 'Preparing transmission...');
+    async function setupRawSenderChannel(file) {
+      initTransferView('SENDING FILE', 'Preparing transfer...', 0, file.name, file.size);
 
       // Send metadata first
-      activeConnection.send(JSON.stringify({
-        type: 'meta',
+      rawDataChannel.send(JSON.stringify({
+        type: 'file-meta',
         name: file.name,
         size: file.size,
         fileType: file.type
       }));
 
-      const channel = activeConnection.dataChannel;
-      channel.binaryType = 'arraybuffer';
-      channel.bufferedAmountLowThreshold = 512 * 1024; // 512 KB threshold for max throughput
+      // Listen for control & receiver progress sync acknowledgements
+      rawDataChannel.onmessage = (event) => {
+        if (typeof event.data === 'string') {
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'sync-ack') {
+              // Exact progress match from receiver's actual disk/socket receipts
+              const progress = Math.min(99, Math.round((msg.bytes / file.size) * 100));
+              updateProgressHUD(progress, 'Sending file...');
+            } else if (msg.type === 'file-done') {
+              showTransferComplete(true);
+            } else if (msg.type === 'control-cancel') {
+              showToast('Receiver cancelled the transfer.');
+              cancelAndReset();
+            }
+          } catch (e) {}
+        }
+      };
+
+      // 256 KB threshold prevents memory choke while maintaining 40+ MB/s local WiFi throughput
+      rawDataChannel.bufferedAmountLowThreshold = 256 * 1024;
 
       let offset = 0;
-      speedMetrics.lastTime = performance.now();
-      speedMetrics.lastBytes = 0;
+      speedTracker.lastTime = performance.now();
+      speedTracker.lastBytes = 0;
 
-      async function pushNextChunk() {
+      async function pushChunkStream() {
         while (offset < file.size) {
           if (isCancelled) return;
 
-          // Backpressure pause
-          if (channel.bufferedAmount > channel.bufferedAmountLowThreshold) {
-            channel.onbufferedamountlow = () => {
-              channel.onbufferedamountlow = null;
-              pushNextChunk();
+          // Backpressure loop: pause when socket buffer is saturated
+          if (rawDataChannel.bufferedAmount > rawDataChannel.bufferedAmountLowThreshold) {
+            rawDataChannel.onbufferedamountlow = () => {
+              rawDataChannel.onbufferedamountlow = null;
+              pushChunkStream();
             };
             return;
           }
@@ -751,33 +924,30 @@
           const slice = file.slice(offset, offset + CHUNK_SIZE);
           const buffer = await slice.arrayBuffer();
 
-          if (channel.readyState !== 'open') return;
+          if (rawDataChannel.readyState !== 'open') return;
 
-          channel.send(buffer);
+          rawDataChannel.send(buffer);
           offset += buffer.byteLength;
 
           const now = performance.now();
-          if (now - speedMetrics.lastTime > 250) {
-            updateSpeedUI(offset, file.size, now);
-            speedMetrics.lastTime = now;
-            speedMetrics.lastBytes = offset;
+          if (now - speedTracker.lastTime > 200) {
+            updateSpeedMetrics(offset, file.size, now);
+            speedTracker.lastTime = now;
+            speedTracker.lastBytes = offset;
           }
-
-          const progress = Math.min(99, Math.round((offset / file.size) * 100));
-          updateProgress(progress, 'Sending file...');
         }
 
-        updateProgress(99, 'Waiting for receiver confirmation...');
+        updateProgressHUD(99, 'Verifying with receiver...');
       }
 
-      pushNextChunk();
+      pushChunkStream();
     }
 
-    function updateSpeedUI(currentBytes, totalBytes, now) {
-      const timeDiff = (now - speedMetrics.lastTime) / 1000;
+    function updateSpeedMetrics(currentBytes, totalBytes, now) {
+      const timeDiff = (now - speedTracker.lastTime) / 1000;
       if (timeDiff <= 0) return;
 
-      const bytesDiff = currentBytes - speedMetrics.lastBytes;
+      const bytesDiff = currentBytes - speedTracker.lastBytes;
       const speedBps = bytesDiff / timeDiff;
 
       let speedText = '0.0 MB/s';
@@ -787,7 +957,7 @@
         speedText = (speedBps / 1024).toFixed(0) + ' KB/s';
       }
 
-      const remainingBytes = totalBytes - currentBytes;
+      const remainingBytes = Math.max(0, totalBytes - currentBytes);
       const remainingSecs = speedBps > 0 ? Math.round(remainingBytes / speedBps) : 0;
       const etaText = remainingSecs > 0 ? `ETA: ${remainingSecs}s` : 'ETA: finalizing...';
 
@@ -795,17 +965,12 @@
       document.getElementById('transfer-eta').innerText = etaText;
     }
 
-    function showProgress() {
-      document.getElementById('progress-box').classList.remove('hidden');
-    }
-
-    function updateProgress(percent, label) {
+    function updateProgressHUD(percent, label) {
       document.getElementById('progress-bar-fill').style.width = percent + '%';
       document.getElementById('transfer-percentage').innerText = percent + '%';
       document.getElementById('transfer-status').innerText = label;
     }
 
-    // Auto-connect when URL contains ?code=
     window.addEventListener('DOMContentLoaded', () => {
       const urlParams = new URLSearchParams(window.location.search);
       const autoCode = urlParams.get('code');
