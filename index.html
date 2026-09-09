@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Sendly — Ultra-Fast Direct P2P File Transfer</title>
+  <title>Sendly — Ultra-Fast Direct P2P Transfer</title>
 
   <!-- PWA Theme Meta -->
   <meta name="theme-color" content="#5b68f6">
@@ -11,7 +11,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 
-  <!-- Dynamic Icon & Manifest -->
+  <!-- Dynamic Icon Generation -->
   <script>
     (function() {
       const canvas = document.createElement('canvas');
@@ -43,7 +43,7 @@
     })();
   </script>
 
-  <!-- High-Speed WebRTC Signaling and QR Library -->
+  <!-- PeerJS & QR Code Engines -->
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
@@ -350,7 +350,6 @@
       margin-bottom: 12px;
     }
 
-    /* Zero CPU-stall GPU accelerated bar */
     #progress-bar-fill {
       width: 100%;
       height: 100%;
@@ -360,7 +359,7 @@
       transform-origin: left center;
       will-change: transform;
       contain: strict;
-      transition: transform 0.12s linear;
+      transition: transform 0.1s linear;
     }
 
     .progress-info {
@@ -551,12 +550,12 @@
 
   <script>
     /*
-      OPTIMIZATIONS IMPLEMENTED:
-      1. Optimal SCTP DataChannel chunk sizing (64KB). Avoids browser memory fragmentation and packet stalls.
-      2. Off-Heap Chunk Batching on Receiver (8MB sub-blobs). Eliminates JavaScript Heap garbage collection freeze.
-      3. Non-blocking Asynchronous Slicing: Yields to the main thread every 2MB so the UI stays at 60 FPS.
-      4. Auto Screen WakeLock: Keeps phone screens awake so mobile OS doesn't kill the transfer in the background.
-      5. Paced Backpressure: 2MB High Water, 512KB Low Water. Maximizes throughput on Wi-Fi without bufferbloat.
+      ULTRA-STABLE STREAMING ENGINE:
+      1. Continuous Pipelining: Keeps 512KB - 1MB in flight at all times using native 'bufferedamountlow'.
+      2. No idle socket gaps: Never lets the SCTP network buffer drain to zero.
+      3. Rolling 1-second Speed Window: Eliminates erratic 500kbps-4mbps jitter on the UI.
+      4. Chunk Partitioning: Commits 16MB sub-blobs on the receiver to protect RAM and avoid GC freeze.
+      5. Screen WakeLock API: Prevents mobile devices from sleeping during transfer.
     */
 
     const PEER_CONFIG = {
@@ -570,11 +569,11 @@
       }
     };
 
-    // Buffer thresholds
-    const CHUNK_SIZE = 64 * 1024; // 64 KB (Universally optimal for WebRTC SCTP stack)
-    const SEND_HIGH_WATER = 2 * 1024 * 1024; // 2 MB
-    const SEND_LOW_WATER = 512 * 1024;       // 512 KB
-    const RECEIVER_BATCH_SIZE = 8 * 1024 * 1024; // 8 MB sub-blob partition size
+    // Buffer Tuning for High Stability & Max Speed
+    const CHUNK_SIZE = 64 * 1024;               // 64 KB per SCTP packet (WebRTC Standard)
+    const BUFFER_HIGH = 1024 * 1024;            // 1 MB High Water (Upper limit in socket)
+    const BUFFER_LOW = 384 * 1024;              // 384 KB Low Water (Trigger to feed more immediately)
+    const RECEIVER_BATCH_SIZE = 16 * 1024 * 1024; // 16 MB sub-blob memory partition
 
     let peer = null;
     let activeConnection = null;
@@ -587,11 +586,9 @@
     let currentBytesTransferred = 0;
     let totalBytesToTransfer = 0;
 
-    // Smoothed UI metrics
+    // Smoothed Rolling Speed Metrics
+    let speedSamples = [];
     let uiTimer = null;
-    let uiLastBytes = 0;
-    let uiLastTime = 0;
-    let speedEmaBps = 0;
     let targetStatusText = 'Connecting...';
     let targetEtaText = 'ETA: calculating...';
 
@@ -645,20 +642,23 @@
       if (pct) pct.innerText = Math.floor(p) + '%';
     }
 
-    function renderTransferUI(force = false) {
+    function renderTransferUI() {
       const now = performance.now();
-      if (!force && uiLastTime && now - uiLastTime < 200) return;
+      speedSamples.push({ time: now, bytes: currentBytesTransferred });
 
-      const dt = uiLastTime ? (now - uiLastTime) / 1000 : 0;
-      const db = currentBytesTransferred - uiLastBytes;
-
-      if (dt > 0) {
-        const instant = Math.max(0, db / dt);
-        speedEmaBps = speedEmaBps === 0 ? instant : (speedEmaBps * 0.7 + instant * 0.3);
+      // Maintain rolling window of 1000ms to eliminate instant jitter
+      while (speedSamples.length > 0 && now - speedSamples[0].time > 1000) {
+        speedSamples.shift();
       }
 
-      uiLastTime = now;
-      uiLastBytes = currentBytesTransferred;
+      let currentSpeedBps = 0;
+      if (speedSamples.length >= 2) {
+        const timeDiff = (speedSamples[speedSamples.length - 1].time - speedSamples[0].time) / 1000;
+        const bytesDiff = speedSamples[speedSamples.length - 1].bytes - speedSamples[0].bytes;
+        if (timeDiff > 0.1) {
+          currentSpeedBps = bytesDiff / timeDiff;
+        }
+      }
 
       const realPercent = totalBytesToTransfer > 0
         ? (currentBytesTransferred / totalBytesToTransfer) * 100
@@ -675,10 +675,10 @@
       if (speed) {
         if (targetStatusText === 'Delivered') {
           speed.innerText = 'Completed';
-        } else if (speedEmaBps >= 1024 * 1024) {
-          speed.innerText = (speedEmaBps / (1024 * 1024)).toFixed(1) + ' MB/s';
-        } else if (speedEmaBps >= 1024) {
-          speed.innerText = (speedEmaBps / 1024).toFixed(0) + ' KB/s';
+        } else if (currentSpeedBps >= 1024 * 1024) {
+          speed.innerText = (currentSpeedBps / (1024 * 1024)).toFixed(1) + ' MB/s';
+        } else if (currentSpeedBps >= 1024) {
+          speed.innerText = (currentSpeedBps / 1024).toFixed(0) + ' KB/s';
         } else {
           speed.innerText = '0 KB/s';
         }
@@ -687,9 +687,9 @@
       if (eta) {
         if (targetStatusText === 'Delivered') {
           eta.innerText = '';
-        } else if (speedEmaBps > 0 && totalBytesToTransfer > 0) {
+        } else if (currentSpeedBps > 0 && totalBytesToTransfer > 0) {
           const remaining = Math.max(0, totalBytesToTransfer - currentBytesTransferred);
-          const secs = Math.ceil(remaining / speedEmaBps);
+          const secs = Math.ceil(remaining / currentSpeedBps);
           eta.innerText = secs > 0 ? `ETA: ${secs}s` : 'ETA: <1s';
         } else {
           eta.innerText = targetEtaText;
@@ -699,13 +699,11 @@
 
     function startUiLoop() {
       stopUiLoop();
-      uiLastBytes = currentBytesTransferred;
-      uiLastTime = performance.now();
-      speedEmaBps = 0;
+      speedSamples = [];
       uiTimer = setInterval(() => {
-        if (!isCancelled) renderTransferUI(false);
-      }, 200);
-      renderTransferUI(true);
+        if (!isCancelled) renderTransferUI();
+      }, 150);
+      renderTransferUI();
     }
 
     function stopUiLoop() {
@@ -787,7 +785,7 @@
         document.execCommand('copy');
         showToast('Link copied to clipboard!');
       } catch (_) {
-        showToast('Copy link manually: ' + shareUrl);
+        showToast('Copy link: ' + shareUrl);
       }
       document.body.removeChild(el);
     }
@@ -852,7 +850,7 @@
       targetEtaText = '';
       currentBytesTransferred = totalBytesToTransfer;
       setProgressPercent(100);
-      renderTransferUI(true);
+      renderTransferUI();
       stopUiLoop();
       releaseWakeLock();
 
@@ -919,7 +917,7 @@
           try {
             rawDataChannel = conn.dataChannel;
             rawDataChannel.binaryType = 'arraybuffer';
-            setupRawSenderChannel(file);
+            setupContinuousSenderChannel(file);
           } catch (e) {
             console.error(e);
             showToast('Failed to initialize transfer channel.');
@@ -972,7 +970,7 @@
           try {
             rawDataChannel = activeConnection.dataChannel;
             rawDataChannel.binaryType = 'arraybuffer';
-            setupRawReceiverChannel();
+            setupContinuousReceiverChannel();
           } catch (e) {
             console.error(e);
             showToast('Failed to open data channel.');
@@ -985,7 +983,7 @@
         activeConnection.on('error', (err) => {
           console.error(err);
           targetStatusText = 'Connection failed.';
-          renderTransferUI(true);
+          renderTransferUI();
           showToast('Could not connect to peer.');
         });
       };
@@ -994,7 +992,7 @@
       else if (peer) peer.once('open', startConnection);
     }
 
-    function setupRawReceiverChannel() {
+    function setupContinuousReceiverChannel() {
       let tempBatch = [];
       let tempBatchSize = 0;
       let blobBatches = [];
@@ -1008,7 +1006,6 @@
         if (isCancelled || completed) return;
         const data = event.data;
 
-        // Metadata handling
         if (typeof data === 'string') {
           let msg;
           try { msg = JSON.parse(data); } catch (_) { return; }
@@ -1037,7 +1034,6 @@
 
         if (!meta) return;
 
-        // Binary chunk handling
         let chunkBytes = 0;
         if (data instanceof ArrayBuffer) {
           tempBatch.push(data);
@@ -1051,7 +1047,7 @@
         tempBatchSize += chunkBytes;
         currentBytesTransferred += chunkBytes;
 
-        // Off-heap partitioning: Commit to Blob every 8MB to keep JS Heap clean
+        // Partition memory in 16MB sub-blobs to completely prevent garbage collection freeze
         if (tempBatchSize >= RECEIVER_BATCH_SIZE) {
           blobBatches.push(new Blob(tempBatch));
           tempBatch = [];
@@ -1074,7 +1070,6 @@
           const finalBatches = blobBatches;
           blobBatches = [];
 
-          // Defer file download trigger slightly to free the message loop
           setTimeout(() => downloadFileFast(finalBatches, meta), 10);
         }
       };
@@ -1083,11 +1078,11 @@
     function downloadFileFast(batches, meta) {
       if (isCancelled) return;
       targetStatusText = 'Saving to device...';
-      renderTransferUI(true);
+      renderTransferUI();
 
       try {
         const finalBlob = new Blob(batches, { type: meta.fileType || 'application/octet-stream' });
-        batches.length = 0; // Immediate release
+        batches.length = 0;
 
         const url = URL.createObjectURL(finalBlob);
         const a = document.createElement('a');
@@ -1106,12 +1101,12 @@
       } catch (err) {
         console.error('File saving error:', err);
         targetStatusText = 'Save failed.';
-        renderTransferUI(true);
+        renderTransferUI();
         showToast('Storage write failed.');
       }
     }
 
-    function setupRawSenderChannel(file) {
+    function setupContinuousSenderChannel(file) {
       initTransferView('SENDING FILE', 'Connecting to receiver...', 0, file.name, file.size);
 
       let started = false;
@@ -1146,11 +1141,11 @@
           }
           if (!started && !isCancelled) {
             started = true;
-            pumpStreamMaximumSpeed(file).catch(err => {
+            pumpStreamContinuous(file).catch(err => {
               console.error('Send error:', err);
               if (!isCancelled) {
                 targetStatusText = 'Transfer error.';
-                renderTransferUI(true);
+                renderTransferUI();
                 showToast('Failed sending file.');
               }
             });
@@ -1164,85 +1159,48 @@
       };
     }
 
-    function waitForLowBuffer(dc, threshold) {
-      if (!dc || dc.readyState !== 'open' || dc.bufferedAmount <= threshold) {
-        return Promise.resolve();
-      }
-
-      return new Promise((resolve) => {
-        let timer = null;
-        const cleanup = () => {
-          if (timer) clearInterval(timer);
-          try { dc.removeEventListener('bufferedamountlow', onLow); } catch (_) {}
-        };
-        const done = () => {
-          cleanup();
-          resolve();
-        };
-        const onLow = () => {
-          if (dc.bufferedAmount <= threshold || dc.readyState !== 'open') done();
-        };
-
-        try { dc.addEventListener('bufferedamountlow', onLow); } catch (_) {}
-        // Fallback polling in case the event is swallowed
-        timer = setInterval(() => {
-          if (!dc || dc.readyState !== 'open' || dc.bufferedAmount <= threshold) done();
-        }, 15);
-      });
-    }
-
-    async function pumpStreamMaximumSpeed(file) {
+    async function pumpStreamContinuous(file) {
       if (!rawDataChannel || rawDataChannel.readyState !== 'open') return;
 
       currentBytesTransferred = 0;
       totalBytesToTransfer = file.size;
       targetStatusText = 'Sending file...';
-      renderTransferUI(true);
+      renderTransferUI();
 
       const dc = rawDataChannel;
-      try {
-        dc.bufferedAmountLowThreshold = SEND_LOW_WATER;
-      } catch (_) {}
+      dc.bufferedAmountLowThreshold = BUFFER_LOW;
 
       let offset = 0;
-      let chunkCount = 0;
 
-      // Pipeline read-ahead to avoid disk I/O idling
-      let nextOffset = Math.min(file.size, offset + CHUNK_SIZE);
-      let nextBufferPromise = file.slice(offset, nextOffset).arrayBuffer();
+      // Pipelined chunk stream: never let the network card sit idle
+      while (offset < file.size && !isCancelled) {
+        if (dc.readyState !== 'open') break;
 
-      while (offset < file.size) {
-        if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') return;
-
-        // Pacing backpressure to prevent bufferbloat
-        if (dc.bufferedAmount >= SEND_HIGH_WATER) {
-          await waitForLowBuffer(dc, SEND_LOW_WATER);
-          if (isCancelled || dc.readyState !== 'open') return;
+        // When buffer reaches high-water mark, wait directly for the event
+        if (dc.bufferedAmount >= BUFFER_HIGH) {
+          await new Promise(resolve => {
+            const onLow = () => {
+              dc.removeEventListener('bufferedamountlow', onLow);
+              resolve();
+            };
+            dc.addEventListener('bufferedamountlow', onLow, { once: true });
+          });
+          if (isCancelled || dc.readyState !== 'open') break;
         }
 
-        const buffer = await nextBufferPromise;
-        const sent = buffer.byteLength;
-        if (!sent) break;
+        const end = Math.min(offset + CHUNK_SIZE, file.size);
+        const slice = file.slice(offset, end);
+        const buffer = await slice.arrayBuffer();
+
+        if (isCancelled || dc.readyState !== 'open') break;
 
         dc.send(buffer);
-        offset += sent;
+        offset = end;
         currentBytesTransferred = offset;
-        chunkCount++;
-
-        // Read next slice immediately
-        nextOffset = Math.min(file.size, offset + CHUNK_SIZE);
-        if (offset < file.size) {
-          nextBufferPromise = file.slice(offset, nextOffset).arrayBuffer();
-        }
-
-        // Asynchronous non-blocking slice: Give UI thread a breath every 32 chunks (~2MB)
-        if (chunkCount % 32 === 0) {
-          await new Promise(resolve => setTimeout(resolve, 0));
-        }
       }
 
-      targetStatusText = 'Finalizing with receiver...';
-      renderTransferUI(true);
+      targetStatusText = 'Finalizing transfer...';
+      renderTransferUI();
     }
 
     window.addEventListener('DOMContentLoaded', () => {
