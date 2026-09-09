@@ -1,0 +1,84 @@
+:root{
+  --bg:#f6f7fb;
+  --card:#fff;
+  --primary:#5b68f6;
+  --muted:#8b9bb4;
+  --danger:#ff4d4f;
+  --radius:12px;
+  --focus: 0 0 0 3px rgba(91,104,246,0.18);
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  background:linear-gradient(180deg,#f8fbff, var(--bg));
+  color:#10253a;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:24px;
+}
+
+.card{
+  width:100%;
+  max-width:420px;
+  background:var(--card);
+  border-radius:var(--radius);
+  box-shadow:0 6px 30px rgba(16,37,58,0.08);
+  padding:20px;
+}
+
+/* visually-hidden utility */
+.visually-hidden{
+  position:absolute!important;
+  height:1px;width:1px;
+  overflow:hidden;clip:rect(1px,1px,1px,1px);
+  white-space:nowrap;border:0;padding:0;margin:-1px;
+}
+
+/* Basic brand */
+.brand{ text-align:center; margin-bottom:12px }
+.brand-icon{ margin:0 auto 6px; width:48px; height:48px; display:flex; align-items:center; justify-content:center }
+.brand-name{ margin:0; font-size:20px; font-weight:700 }
+.tagline{ margin:6px 0 14px; color:var(--muted); font-size:13px }
+
+/* Buttons */
+button{ font:inherit; cursor:pointer; border:0; padding:10px 14px; border-radius:10px }
+.primary-btn{ background:var(--primary); color:#fff; display:inline-flex; gap:8px; align-items:center }
+.secondary-btn{ background:#fff; border:1px solid #e6eaf5; color:var(--primary) }
+.cancel-btn{ background:transparent; color:var(--danger); border:1px solid rgba(255,77,79,0.08) }
+.action-btn-outline{ border:1px dashed #e6eaf5; background:transparent; color:var(--primary) }
+
+/* Focus visible */
+button:focus, input:focus { outline:none; box-shadow:var(--focus) }
+
+/* Views */
+.view{ display:block }
+.hidden{ display:none }
+
+/* OTP inputs */
+.otp-container{ display:flex; gap:8px; justify-content:center; margin:12px 0 18px }
+.otp-input{ width:44px; height:48px; text-align:center; border-radius:8px; border:1px solid #e6eaf5; font-size:18px }
+
+/* Transfer HUD */
+.transfer-hud{ margin-top:12px }
+.progress-bar-bg{ background:#eef3ff; height:8px; border-radius:999px; overflow:hidden }
+#progress-bar-fill{ height:100%; width:0; background:linear-gradient(90deg,var(--primary),#7a83ff) }
+
+/* File meta */
+.file-meta-card{ display:flex; gap:12px; align-items:center; padding:10px; border-radius:10px; background:#fbfcff }
+.file-name-text{ font-weight:600 }
+.file-size-text{ color:var(--muted); font-size:12px }
+
+/* Footer */
+.app-footer{ text-align:center; margin-top:14px; color:var(--muted); font-size:12px }
+
+/* Responsive tweaks */
+@media (max-width:420px){
+  .card{ padding:16px }
+  .brand-name{ font-size:18px }
+}
