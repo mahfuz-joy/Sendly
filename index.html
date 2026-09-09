@@ -14,23 +14,19 @@
   <!-- Professional Edge-to-Edge Adaptive Icon Script -->
   <script>
     (function() {
-      // 1. Draw a full-bleed premium gradient app icon
       const canvas = document.createElement('canvas');
       canvas.width = 512;
       canvas.height = 512;
       const ctx = canvas.getContext('2d');
 
-      // Modern smooth gradient background that fills 100% of the icon frame
       const grad = ctx.createLinearGradient(0, 0, 512, 512);
       grad.addColorStop(0, '#6366f1');
       grad.addColorStop(1, '#4338ca');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, 512, 512);
 
-      // Clean, modern Sendly Paperplane Vector in center
       ctx.fillStyle = '#ffffff';
       ctx.beginPath();
-      // Precise paperplane polygon centered in 512x512 with safe padding
       ctx.moveTo(140, 246);
       ctx.lineTo(372, 140);
       ctx.lineTo(266, 372);
@@ -38,7 +34,6 @@
       ctx.closePath();
       ctx.fill();
 
-      // Fold shadow for depth
       ctx.fillStyle = 'rgba(0, 0, 0, 0.12)';
       ctx.beginPath();
       ctx.moveTo(372, 140);
@@ -49,7 +44,6 @@
 
       const iconUrl = canvas.toDataURL('image/png');
 
-      // 2. Set Favicon & Apple Touch Icon
       const fav = document.createElement('link');
       fav.rel = 'icon';
       fav.type = 'image/png';
@@ -61,7 +55,6 @@
       apple.href = iconUrl;
       document.head.appendChild(apple);
 
-      // 3. Inject Inline Web App Manifest with 'maskable' purpose to remove grey border on Android
       const manifestObj = {
         name: 'Sendly',
         short_name: 'Sendly',
@@ -526,7 +519,7 @@
       <p class="footer-note">Files transfer directly between your devices.</p>
     </div>
 
-    <!-- VIEW 2: SENDER CODE & QR SCREEN (Waiting for connection) -->
+    <!-- VIEW 2: SENDER CODE & QR SCREEN -->
     <div id="view-send" class="hidden">
       <div class="view-header">
         <button class="back-btn" onclick="cancelAndReset()">&#8249;</button>
@@ -591,7 +584,7 @@
         </div>
       </div>
 
-      <!-- Completion Badge (Shown on finish) -->
+      <!-- Completion Badge -->
       <div id="completion-box" class="hidden">
         <div class="success-badge">
           <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
@@ -617,12 +610,11 @@
         </div>
       </div>
 
-      <!-- Action Buttons in Transfer View -->
+      <!-- Action Buttons -->
       <div id="transfer-actions">
         <button id="btn-cancel-transfer" class="cancel-btn" style="margin-top: 4px;" onclick="cancelAndReset()">Cancel Transfer</button>
       </div>
 
-      <!-- Completion Actions -->
       <div id="completion-actions" class="hidden">
         <button class="primary-btn" onclick="sendAnotherFile()">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -635,12 +627,15 @@
   </div>
 
   <script>
+    // Robust STUN servers for seamless WebRTC NAT/Hotspot discovery
     const PEER_CONFIG = {
       config: {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' }
-        ]
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' }
+        ],
+        sdpSemantics: 'unified-plan'
       }
     };
 
@@ -651,9 +646,7 @@
     let isCancelled = false;
     let isSender = false;
 
-    // 64 KB SCTP frame size
     const CHUNK_SIZE = 64 * 1024;
-    // 2 MB memory batching to prevent async bottleneck
     const BATCH_SIZE = 2 * 1024 * 1024;
 
     let speedTracker = {
@@ -738,6 +731,10 @@
       if (peer) peer.destroy();
       peer = new Peer(peerId, PEER_CONFIG);
 
+      peer.on('error', (err) => {
+        showToast('Connection error: ' + err.type);
+      });
+
       peer.on('open', () => {
         document.getElementById('display-code').innerText = code;
         showView('view-send');
@@ -762,6 +759,10 @@
           rawDataChannel.binaryType = 'arraybuffer';
           setupRawSenderChannel(selectedFile);
         });
+
+        activeConnection.on('error', (err) => {
+          showToast('Data channel error.');
+        });
       });
     }
 
@@ -783,6 +784,9 @@
 
     function initReceiverPeer() {
       peer = new Peer(PEER_CONFIG);
+      peer.on('error', (err) => {
+        showToast('Network error: ' + err.type);
+      });
     }
 
     function setupOtpInputs() {
@@ -823,16 +827,16 @@
       isCancelled = false;
 
       const targetPeerId = 'sendly-' + targetCode;
-      initTransferView('RECEIVING FILE', 'Connecting directly...', 0);
+      initTransferView('RECEIVING FILE', 'Connecting to sender...', 0);
 
       if (!peer) peer = new Peer(PEER_CONFIG);
 
-      peer.on('open', () => {
+      if (peer.open) {
         makeReceiverCall(targetPeerId);
-      });
-
-      if (peer.id) {
-        makeReceiverCall(targetPeerId);
+      } else {
+        peer.on('open', () => {
+          makeReceiverCall(targetPeerId);
+        });
       }
     }
 
@@ -843,6 +847,11 @@
         rawDataChannel = activeConnection.dataChannel;
         rawDataChannel.binaryType = 'arraybuffer';
         setupRawReceiverChannel();
+      });
+
+      activeConnection.on('error', (err) => {
+        updateProgressHUD(0, 'Failed to connect.');
+        showToast('Connection failed.');
       });
     }
 
@@ -893,7 +902,7 @@
               speedTracker.lastTime = performance.now();
               speedTracker.lastBytes = 0;
 
-              initTransferView('RECEIVING FILE', 'Starting incoming stream...', 0, meta.name, meta.size);
+              initTransferView('RECEIVING FILE', 'Starting stream...', 0, meta.name, meta.size);
             } else if (msg.type === 'control-cancel') {
               showToast('Sender cancelled the transfer.');
               cancelAndReset();
