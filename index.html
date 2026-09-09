@@ -11,7 +11,6 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 
-  <!-- Professional Edge-to-Edge Adaptive Icon Script -->
   <script>
     (function() {
       const canvas = document.createElement('canvas');
@@ -429,7 +428,7 @@
       width: 0%;
       height: 100%;
       background: linear-gradient(90deg, #5b68f6, #10b981);
-      transition: width 0.15s ease-out;
+      transition: width 0.12s linear;
     }
 
     .progress-info {
@@ -627,7 +626,7 @@
   </div>
 
   <script>
-    // Real Metered TURN Credentials + Google Global STUN Servers
+    // Metered TURN Credentials + Global Google STUN Servers
     const PEER_CONFIG = {
       config: {
         iceServers: [
@@ -667,20 +666,11 @@
     let isCancelled = false;
     let isSender = false;
     let handshakeTimer = null;
-    let isPumpingData = false;
 
-    // Continuous Flow Settings: Eliminates burst-and-pause fluctuations
-    const CHUNK_SIZE = 64 * 1024; // 64 KB (Universal optimal SCTP frame)
-    const BATCH_SIZE = 2 * 1024 * 1024; // 2 MB memory slice
-    const HIGH_WATERMARK = 1024 * 1024; // 1 MB ceiling (prevents bufferbloat)
-    const LOW_WATERMARK = 256 * 1024; // 256 KB floor (immediate refill, no stalling)
-
-    // Rolling 1-second sample window for a completely flat & stable speed display
-    let speedTracker = {
-      samples: [], // Array of { time, bytes }
-      displayedSpeed: '0.0 MB/s',
-      displayedEta: 'calculating...'
-    };
+    // High performance and zero-freeze streaming limits
+    const CHUNK_SIZE = 64 * 1024; // 64 KB (Standard SCTP safe payload)
+    const BUFFER_CEILING = 1.5 * 1024 * 1024; // 1.5 MB high watermark
+    const BUFFER_FLOOR = 384 * 1024; // 384 KB low watermark (instant resumption)
 
     function showToast(message) {
       const toast = document.getElementById('toast');
@@ -712,7 +702,6 @@
 
     function cancelAndReset() {
       isCancelled = true;
-      isPumpingData = false;
       if (handshakeTimer) {
         clearInterval(handshakeTimer);
         handshakeTimer = null;
@@ -757,7 +746,6 @@
       selectedFile = file;
       isCancelled = false;
       isSender = true;
-      isPumpingData = false;
 
       const code = generateSixDigitCode();
       const peerId = 'sendly-' + code;
@@ -800,7 +788,7 @@
           activeConnection.on('open', onOpen);
         }
 
-        activeConnection.on('error', (err) => {
+        activeConnection.on('error', () => {
           showToast('Data channel error.');
         });
       });
@@ -895,7 +883,7 @@
         activeConnection.on('open', onOpen);
       }
 
-      activeConnection.on('error', (err) => {
+      activeConnection.on('error', () => {
         updateProgressHUD(0, 'Failed to connect.');
         showToast('Connection failed.');
       });
@@ -913,9 +901,11 @@
       document.getElementById('completion-actions').classList.add('hidden');
 
       updateProgressHUD(percent, statusText);
+      document.getElementById('transfer-speed').innerText = '0.0 MB/s';
+      document.getElementById('transfer-eta').innerText = 'ETA: calculating...';
     }
 
-    function showTransferComplete(isSenderSide) {
+    function showTransferComplete() {
       document.getElementById('transfer-icon-area').classList.add('hidden');
       document.getElementById('completion-box').classList.remove('hidden');
       document.getElementById('transfer-actions').classList.add('hidden');
@@ -926,12 +916,37 @@
       document.getElementById('transfer-eta').innerText = '';
     }
 
+    function updateProgressHUD(percent, label) {
+      document.getElementById('progress-bar-fill').style.width = percent + '%';
+      document.getElementById('transfer-percentage').innerText = percent + '%';
+      document.getElementById('transfer-status').innerText = label;
+    }
+
+    function renderSpeedHUD(speedBps, transferredBytes, totalBytes) {
+      let speedText = '0.0 MB/s';
+      if (speedBps >= 1024 * 1024) {
+        speedText = (speedBps / (1024 * 1024)).toFixed(1) + ' MB/s';
+      } else if (speedBps > 0) {
+        speedText = (speedBps / 1024).toFixed(0) + ' KB/s';
+      }
+
+      const remainingBytes = Math.max(0, totalBytes - transferredBytes);
+      const remainingSecs = speedBps > 0 ? Math.round(remainingBytes / speedBps) : 0;
+      const etaText = remainingSecs > 0 ? `ETA: ${remainingSecs}s` : (transferredBytes >= totalBytes ? 'Done' : 'ETA: finalizing...');
+
+      document.getElementById('transfer-speed').innerText = speedText;
+      document.getElementById('transfer-eta').innerText = etaText;
+    }
+
     function setupRawReceiverChannel() {
       let receivedChunks = [];
       let meta = null;
       let receivedBytes = 0;
 
-      speedTracker.samples = [];
+      let lastUiUpdate = 0;
+      let lastSpeedCalc = performance.now();
+      let bytesAtLastSpeedCalc = 0;
+      let smoothedSpeedBps = 0;
 
       rawDataChannel.onmessage = (event) => {
         if (isCancelled) return;
@@ -944,11 +959,14 @@
               meta = msg;
               receivedChunks = [];
               receivedBytes = 0;
-              speedTracker.samples = [];
+              lastUiUpdate = 0;
+              lastSpeedCalc = performance.now();
+              bytesAtLastSpeedCalc = 0;
+              smoothedSpeedBps = 0;
 
               initTransferView('RECEIVING FILE', 'Receiving file...', 0, meta.name, meta.size);
 
-              // Send immediate handshake acknowledgement
+              // Immediate handshake confirmation
               rawDataChannel.send(JSON.stringify({ type: 'file-meta-ack' }));
             } else if (msg.type === 'control-cancel') {
               showToast('Sender cancelled the transfer.');
@@ -958,15 +976,32 @@
           return;
         }
 
-        // Receiving binary stream chunks
+        // Receiving binary stream
         if (data instanceof ArrayBuffer && meta) {
           receivedChunks.push(data);
           receivedBytes += data.byteLength;
 
-          const progress = Math.min(99, Math.round((receivedBytes / meta.size) * 100));
-          updateProgressHUD(progress, 'Receiving...');
-          updateSpeedMetrics(receivedBytes, meta.size, performance.now());
+          const now = performance.now();
 
+          // Calculate speed every 250ms smoothly
+          if (now - lastSpeedCalc >= 250) {
+            const dt = (now - lastSpeedCalc) / 1000;
+            const db = receivedBytes - bytesAtLastSpeedCalc;
+            const instantSpeed = db / dt;
+            smoothedSpeedBps = smoothedSpeedBps === 0 ? instantSpeed : (smoothedSpeedBps * 0.75 + instantSpeed * 0.25);
+            bytesAtLastSpeedCalc = receivedBytes;
+            lastSpeedCalc = now;
+          }
+
+          // STRICT THROTTLE: Update DOM at most once every 120ms to prevent browser freezing
+          if (now - lastUiUpdate >= 120 || receivedBytes >= meta.size) {
+            lastUiUpdate = now;
+            const progress = Math.min(99, Math.round((receivedBytes / meta.size) * 100));
+            updateProgressHUD(progress, 'Receiving...');
+            renderSpeedHUD(smoothedSpeedBps, receivedBytes, meta.size);
+          }
+
+          // Completion check
           if (receivedBytes >= meta.size) {
             updateProgressHUD(100, 'Saving to device...');
 
@@ -987,7 +1022,7 @@
               URL.revokeObjectURL(url);
             }, 10000);
 
-            showTransferComplete(false);
+            showTransferComplete();
           }
         }
       };
@@ -995,11 +1030,10 @@
 
     function setupRawSenderChannel(file) {
       initTransferView('SENDING FILE', 'Connecting to receiver...', 0, file.name, file.size);
-      isPumpingData = false;
+      let isTransferring = false;
 
-      // Two-way handshake loop: repeatedly notify receiver until acknowledged
       const sendMeta = () => {
-        if (isCancelled || isPumpingData) return;
+        if (isCancelled || isTransferring) return;
         try {
           if (rawDataChannel && rawDataChannel.readyState === 'open') {
             rawDataChannel.send(JSON.stringify({
@@ -1025,12 +1059,12 @@
                 clearInterval(handshakeTimer);
                 handshakeTimer = null;
               }
-              if (!isPumpingData) {
-                isPumpingData = true;
-                pumpBatchedStream(file);
+              if (!isTransferring) {
+                isTransferring = true;
+                pumpStreamSmooth(file);
               }
             } else if (msg.type === 'file-done') {
-              showTransferComplete(true);
+              showTransferComplete();
             } else if (msg.type === 'control-cancel') {
               showToast('Receiver cancelled the transfer.');
               cancelAndReset();
@@ -1040,111 +1074,71 @@
       };
     }
 
-    async function pumpBatchedStream(file) {
+    async function pumpStreamSmooth(file) {
       let fileOffset = 0;
-      speedTracker.samples = [];
+      let lastUiUpdate = 0;
+      let lastSpeedCalc = performance.now();
+      let bytesAtLastSpeedCalc = 0;
+      let smoothedSpeedBps = 0;
+
       updateProgressHUD(0, 'Sending file...');
 
       if (rawDataChannel) {
-        rawDataChannel.bufferedAmountLowThreshold = LOW_WATERMARK;
+        rawDataChannel.bufferedAmountLowThreshold = BUFFER_FLOOR;
       }
 
       while (fileOffset < file.size) {
-        if (isCancelled) return;
+        if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') return;
 
-        const batchEnd = Math.min(fileOffset + BATCH_SIZE, file.size);
-        const batchSlice = file.slice(fileOffset, batchEnd);
-        const batchBuffer = await batchSlice.arrayBuffer();
+        // Flow control without busy-waiting: Clean promise with 60ms timeout watchdog
+        if (rawDataChannel.bufferedAmount > BUFFER_CEILING) {
+          await new Promise((resolve) => {
+            let timer = null;
+            const onLow = () => {
+              if (timer) clearTimeout(timer);
+              if (rawDataChannel) rawDataChannel.onbufferedamountlow = null;
+              resolve();
+            };
 
-        let batchSubOffset = 0;
-        while (batchSubOffset < batchBuffer.byteLength) {
-          if (isCancelled) return;
+            if (rawDataChannel) {
+              rawDataChannel.onbufferedamountlow = onLow;
+            }
+            // Watchdog in case event is missed by browser
+            timer = setTimeout(onLow, 60);
+          });
+        }
 
-          // Tight pacing window: drains in just ~40ms, preventing burst-and-stop oscillations
-          if (rawDataChannel.bufferedAmount > HIGH_WATERMARK) {
-            await new Promise((resolve) => {
-              let unhooked = false;
-              const onBufferLow = () => {
-                if (!unhooked) {
-                  unhooked = true;
-                  if (rawDataChannel) rawDataChannel.onbufferedamountlow = null;
-                  clearInterval(safetyCheck);
-                  resolve();
-                }
-              };
+        if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') return;
 
-              rawDataChannel.onbufferedamountlow = onBufferLow;
+        const sliceEnd = Math.min(fileOffset + CHUNK_SIZE, file.size);
+        const slice = file.slice(fileOffset, sliceEnd);
+        const chunk = await slice.arrayBuffer();
 
-              const safetyCheck = setInterval(() => {
-                if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') {
-                  clearInterval(safetyCheck);
-                  resolve();
-                } else if (rawDataChannel.bufferedAmount <= LOW_WATERMARK) {
-                  onBufferLow();
-                }
-              }, 4);
-            });
-          }
+        rawDataChannel.send(chunk);
+        fileOffset += chunk.byteLength;
 
-          if (!rawDataChannel || rawDataChannel.readyState !== 'open') return;
+        const now = performance.now();
 
-          const sendEnd = Math.min(batchSubOffset + CHUNK_SIZE, batchBuffer.byteLength);
-          const chunk = batchBuffer.slice(batchSubOffset, sendEnd);
-          rawDataChannel.send(chunk);
+        // Calculate smooth speed every 250ms
+        if (now - lastSpeedCalc >= 250) {
+          const dt = (now - lastSpeedCalc) / 1000;
+          const db = fileOffset - bytesAtLastSpeedCalc;
+          const instantSpeed = db / dt;
+          smoothedSpeedBps = smoothedSpeedBps === 0 ? instantSpeed : (smoothedSpeedBps * 0.75 + instantSpeed * 0.25);
+          bytesAtLastSpeedCalc = fileOffset;
+          lastSpeedCalc = now;
+        }
 
-          batchSubOffset += chunk.byteLength;
-          fileOffset += chunk.byteLength;
-
+        // STRICT THROTTLE: Update sender UI at most once every 120ms (zero freezing)
+        if (now - lastUiUpdate >= 120 || fileOffset >= file.size) {
+          lastUiUpdate = now;
           const progress = Math.min(99, Math.round((fileOffset / file.size) * 100));
           updateProgressHUD(progress, 'Sending file...');
-          updateSpeedMetrics(fileOffset, file.size, performance.now());
+          renderSpeedHUD(smoothedSpeedBps, fileOffset, file.size);
         }
       }
 
       updateProgressHUD(99, 'Finalizing transfer...');
-    }
-
-    function updateSpeedMetrics(currentBytes, totalBytes, now) {
-      // Record sample
-      speedTracker.samples.push({ time: now, bytes: currentBytes });
-
-      // Keep only samples from the last 1000ms
-      const cutoffTime = now - 1000;
-      while (speedTracker.samples.length > 2 && speedTracker.samples[0].time < cutoffTime) {
-        speedTracker.samples.shift();
-      }
-
-      const oldest = speedTracker.samples[0];
-      const durationSeconds = (now - oldest.time) / 1000;
-
-      // Update calculations once every 200ms or on sufficient time window
-      if (durationSeconds >= 0.3) {
-        const bytesDiff = currentBytes - oldest.bytes;
-        const speedBps = bytesDiff / durationSeconds;
-
-        let speedText = '0.0 MB/s';
-        if (speedBps >= 1024 * 1024) {
-          speedText = (speedBps / (1024 * 1024)).toFixed(1) + ' MB/s';
-        } else if (speedBps > 0) {
-          speedText = (speedBps / 1024).toFixed(0) + ' KB/s';
-        }
-
-        const remainingBytes = Math.max(0, totalBytes - currentBytes);
-        const remainingSecs = speedBps > 0 ? Math.round(remainingBytes / speedBps) : 0;
-        const etaText = remainingSecs > 0 ? `ETA: ${remainingSecs}s` : (currentBytes >= totalBytes ? 'Done' : 'ETA: finalizing...');
-
-        speedTracker.displayedSpeed = speedText;
-        speedTracker.displayedEta = etaText;
-      }
-
-      document.getElementById('transfer-speed').innerText = speedTracker.displayedSpeed;
-      document.getElementById('transfer-eta').innerText = speedTracker.displayedEta;
-    }
-
-    function updateProgressHUD(percent, label) {
-      document.getElementById('progress-bar-fill').style.width = percent + '%';
-      document.getElementById('transfer-percentage').innerText = percent + '%';
-      document.getElementById('transfer-status').innerText = label;
     }
 
     window.addEventListener('DOMContentLoaded', () => {
