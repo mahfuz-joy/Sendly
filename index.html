@@ -669,14 +669,16 @@
     let handshakeTimer = null;
     let isPumpingData = false;
 
-    // Stable High-Speed Settings
-    const CHUNK_SIZE = 64 * 1024; // 64 KB (Flawless WebRTC standard)
-    const BATCH_SIZE = 2 * 1024 * 1024; // 2 MB disk slice
-    const BUFFER_LIMIT = 1024 * 1024; // 1 MB buffer ceiling to avoid congestion
+    // High-Throughput Pipeline Settings (Maximum Wi-Fi/LAN Speed)
+    const CHUNK_SIZE = 64 * 1024; // 64 KB (Universal WebRTC standard)
+    const BATCH_SIZE = 4 * 1024 * 1024; // 4 MB disk slice
+    const HIGH_WATERMARK = 4 * 1024 * 1024; // 4 MB buffer ceiling to maximize throughput
+    const LOW_WATERMARK = 1024 * 1024; // 1 MB trigger threshold
 
     let speedTracker = {
       lastTime: 0,
-      lastBytes: 0
+      lastBytes: 0,
+      currentSpeed: 0
     };
 
     function showToast(message) {
@@ -1043,7 +1045,12 @@
       let fileOffset = 0;
       speedTracker.lastTime = performance.now();
       speedTracker.lastBytes = 0;
+      speedTracker.currentSpeed = 0;
       updateProgressHUD(0, 'Sending file...');
+
+      if (rawDataChannel) {
+        rawDataChannel.bufferedAmountLowThreshold = LOW_WATERMARK;
+      }
 
       while (fileOffset < file.size) {
         if (isCancelled) return;
@@ -1056,13 +1063,34 @@
         while (batchSubOffset < batchBuffer.byteLength) {
           if (isCancelled) return;
 
-          // Safe buffer check: Polling avoids browser event listener deadlocks entirely
-          while (rawDataChannel.bufferedAmount > BUFFER_LIMIT) {
-            if (isCancelled || rawDataChannel.readyState !== 'open') return;
-            await new Promise(r => setTimeout(r, 15));
+          // Non-blocking high watermark sliding pipeline
+          if (rawDataChannel.bufferedAmount > HIGH_WATERMARK) {
+            await new Promise((resolve) => {
+              let unhooked = false;
+              const onBufferLow = () => {
+                if (!unhooked) {
+                  unhooked = true;
+                  if (rawDataChannel) rawDataChannel.onbufferedamountlow = null;
+                  clearInterval(safetyCheck);
+                  resolve();
+                }
+              };
+
+              rawDataChannel.onbufferedamountlow = onBufferLow;
+
+              // Safety watchdog avoids browser event deadlock
+              const safetyCheck = setInterval(() => {
+                if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') {
+                  clearInterval(safetyCheck);
+                  resolve();
+                } else if (rawDataChannel.bufferedAmount <= LOW_WATERMARK) {
+                  onBufferLow();
+                }
+              }, 6);
+            });
           }
 
-          if (rawDataChannel.readyState !== 'open') return;
+          if (!rawDataChannel || rawDataChannel.readyState !== 'open') return;
 
           const sendEnd = Math.min(batchSubOffset + CHUNK_SIZE, batchBuffer.byteLength);
           const chunk = batchBuffer.slice(batchSubOffset, sendEnd);
@@ -1082,10 +1110,19 @@
 
     function updateSpeedMetrics(currentBytes, totalBytes, now) {
       const timeDiff = (now - speedTracker.lastTime) / 1000;
-      if (timeDiff < 0.2) return;
+      if (timeDiff < 0.25) return;
 
       const bytesDiff = currentBytes - speedTracker.lastBytes;
-      const speedBps = bytesDiff / timeDiff;
+      const instantSpeed = bytesDiff / timeDiff;
+
+      // Exponential Moving Average (EMA) to eliminate jumpy fluctuations
+      if (speedTracker.currentSpeed === 0) {
+        speedTracker.currentSpeed = instantSpeed;
+      } else {
+        speedTracker.currentSpeed = speedTracker.currentSpeed * 0.65 + instantSpeed * 0.35;
+      }
+
+      const speedBps = speedTracker.currentSpeed;
 
       let speedText = '0.0 MB/s';
       if (speedBps >= 1024 * 1024) {
@@ -1096,7 +1133,7 @@
 
       const remainingBytes = Math.max(0, totalBytes - currentBytes);
       const remainingSecs = speedBps > 0 ? Math.round(remainingBytes / speedBps) : 0;
-      const etaText = remainingSecs > 0 ? `ETA: ${remainingSecs}s` : (currentBytes >= totalBytes ? 'Done' : 'ETA: calculating...');
+      const etaText = remainingSecs > 0 ? `ETA: ${remainingSecs}s` : (currentBytes >= totalBytes ? 'Done' : 'ETA: finalizing...');
 
       document.getElementById('transfer-speed').innerText = speedText;
       document.getElementById('transfer-eta').innerText = etaText;
