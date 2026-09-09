@@ -628,7 +628,7 @@
   </div>
 
   <script>
-    // Live Metered TURN Credentials + Global Google STUN Servers
+    // Prioritizing local direct P2P STUN with active Metered TURN failover
     const PEER_CONFIG = {
       config: {
         iceServers: [
@@ -669,12 +669,13 @@
     let isSender = false;
     let handshakeTimer = null;
 
-    // HIGH-THROUGHPUT PIPELINE CONSTANTS (Full 5-10+ MB/s Unlocked)
-    const CHUNK_SIZE = 64 * 1024;            // 64 KB SCTP frame
-    const BUFFER_CEILING = 3.5 * 1024 * 1024; // 3.5 MB deep saturation (maximizes bandwidth)
-    const BUFFER_FLOOR = 768 * 1024;         // 768 KB low watermark for immediate refill
+    // Restoring high-speed RAM-batched constants that unlocked 5MB/s
+    const CHUNK_SIZE = 256 * 1024;           // 256 KB chunk size (Peak line throughput)
+    const BATCH_SIZE = 4 * 1024 * 1024;      // 4 MB RAM buffer from disk (Zero disk I/O lag)
+    const BUFFER_CEILING = 4 * 1024 * 1024;  // 4 MB saturation ceiling
+    const BUFFER_FLOOR = 1 * 1024 * 1024;    // 1 MB immediate refill floor
 
-    // 60FPS Smooth UI Animation State (Decouples Network Bursts from Display)
+    // 60FPS Continuous UI Smoothing State
     let displayPercent = 0;
     let targetPercent = 0;
     let displaySpeedBps = 0;
@@ -682,6 +683,9 @@
     let targetStatusText = 'Connecting...';
     let targetEtaText = 'ETA: calculating...';
     let animationFrameId = null;
+
+    // Rolling Speed Window to prevent artificial speed drops
+    let speedHistory = [];
 
     function showToast(message) {
       const toast = document.getElementById('toast');
@@ -711,18 +715,34 @@
       document.getElementById(viewId).classList.remove('hidden');
     }
 
-    // Smooth Lerp (Linear Interpolation) loop: Eliminates all micro-pauses from visual view!
+    function calculateRollingSpeed(bytesCurrent) {
+      const now = performance.now();
+      speedHistory.push({ t: now, b: bytesCurrent });
+
+      // Keep a 1.2 second sliding window: smooths out network pulse pauses completely
+      while (speedHistory.length > 0 && now - speedHistory[0].t > 1200) {
+        speedHistory.shift();
+      }
+
+      if (speedHistory.length >= 2) {
+        const dt = (now - speedHistory[0].t) / 1000;
+        const db = bytesCurrent - speedHistory[0].b;
+        if (dt > 0.15) {
+          return db / dt;
+        }
+      }
+      return 0;
+    }
+
     function startSmoothUiLoop() {
       if (animationFrameId) cancelAnimationFrame(animationFrameId);
 
       const updateLoop = () => {
-        // Smoothly glide displayed progress towards the actual network progress
-        displayPercent += (targetPercent - displayPercent) * 0.14;
+        displayPercent += (targetPercent - displayPercent) * 0.15;
         if (Math.abs(targetPercent - displayPercent) < 0.05) {
           displayPercent = targetPercent;
         }
 
-        // Smoothly glide displayed speed towards target speed
         displaySpeedBps += (targetSpeedBps - displaySpeedBps) * 0.12;
 
         const fill = document.getElementById('progress-bar-fill');
@@ -735,7 +755,6 @@
         if (pctLabel) pctLabel.innerText = Math.floor(displayPercent) + '%';
         if (statusLabel) statusLabel.innerText = targetStatusText;
 
-        // Render smooth speed text
         if (speedLabel && targetStatusText !== 'Delivered') {
           if (displaySpeedBps >= 1024 * 1024) {
             speedLabel.innerText = (displaySpeedBps / (1024 * 1024)).toFixed(1) + ' MB/s';
@@ -788,6 +807,7 @@
       }
       rawDataChannel = null;
       selectedFile = null;
+      speedHistory = [];
       document.getElementById('hidden-file-input').value = '';
       showView('view-home');
     }
@@ -972,6 +992,7 @@
       targetSpeedBps = 0;
       targetStatusText = statusText;
       targetEtaText = 'ETA: calculating...';
+      speedHistory = [];
 
       startSmoothUiLoop();
     }
@@ -1000,9 +1021,7 @@
       let receivedChunks = [];
       let meta = null;
       let receivedBytes = 0;
-
-      let lastSpeedCalc = performance.now();
-      let bytesAtLastSpeedCalc = 0;
+      speedHistory = [];
 
       rawDataChannel.onmessage = (event) => {
         if (isCancelled) return;
@@ -1015,12 +1034,9 @@
               meta = msg;
               receivedChunks = [];
               receivedBytes = 0;
-              lastSpeedCalc = performance.now();
-              bytesAtLastSpeedCalc = 0;
+              speedHistory = [];
 
               initTransferView('RECEIVING FILE', 'Receiving file...', 0, meta.name, meta.size);
-
-              // Send instant handshake ACK to trigger pipeline
               rawDataChannel.send(JSON.stringify({ type: 'file-meta-ack' }));
             } else if (msg.type === 'control-cancel') {
               showToast('Sender cancelled the transfer.');
@@ -1030,32 +1046,22 @@
           return;
         }
 
-        // Receiving binary stream chunks at maximum line speed
+        // Receiving binary stream chunks
         if (data instanceof ArrayBuffer && meta) {
           receivedChunks.push(data);
           receivedBytes += data.byteLength;
 
-          const now = performance.now();
-
-          // Calculate running transfer rate
-          if (now - lastSpeedCalc >= 200) {
-            const dt = (now - lastSpeedCalc) / 1000;
-            const db = receivedBytes - bytesAtLastSpeedCalc;
-            const instantSpeed = db / dt;
-            targetSpeedBps = instantSpeed;
-
-            bytesAtLastSpeedCalc = receivedBytes;
-            lastSpeedCalc = now;
-
+          const speedBps = calculateRollingSpeed(receivedBytes);
+          if (speedBps > 0) {
+            targetSpeedBps = speedBps;
             const remainingBytes = Math.max(0, meta.size - receivedBytes);
-            const remainingSecs = instantSpeed > 0 ? Math.round(remainingBytes / instantSpeed) : 0;
+            const remainingSecs = Math.round(remainingBytes / speedBps);
             targetEtaText = remainingSecs > 0 ? `ETA: ${remainingSecs}s` : 'Done';
           }
 
           targetPercent = Math.min(99.9, (receivedBytes / meta.size) * 100);
           targetStatusText = 'Receiving...';
 
-          // Completion check
           if (receivedBytes >= meta.size) {
             targetStatusText = 'Saving to device...';
 
@@ -1085,6 +1091,7 @@
     function setupRawSenderChannel(file) {
       initTransferView('SENDING FILE', 'Connecting to receiver...', 0, file.name, file.size);
       let isTransferring = false;
+      speedHistory = [];
 
       const sendMeta = () => {
         if (isCancelled || isTransferring) return;
@@ -1130,10 +1137,8 @@
 
     async function pumpStreamMaximumThroughput(file) {
       let fileOffset = 0;
-      let lastSpeedCalc = performance.now();
-      let bytesAtLastSpeedCalc = 0;
-
       targetStatusText = 'Sending file...';
+      speedHistory = [];
 
       if (rawDataChannel) {
         rawDataChannel.bufferedAmountLowThreshold = BUFFER_FLOOR;
@@ -1142,51 +1147,54 @@
       while (fileOffset < file.size) {
         if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') return;
 
-        // Flow control with deep saturation (pours data into pipe without letting buffer empty)
-        if (rawDataChannel.bufferedAmount > BUFFER_CEILING) {
-          await new Promise((resolve) => {
-            let timer = null;
-            const onLow = () => {
-              if (timer) clearTimeout(timer);
-              if (rawDataChannel) rawDataChannel.onbufferedamountlow = null;
-              resolve();
-            };
+        // Read 4 MB into RAM at once: Completely avoids disk read bottleneck!
+        const batchEnd = Math.min(fileOffset + BATCH_SIZE, file.size);
+        const batchSlice = file.slice(fileOffset, batchEnd);
+        const batchBuffer = await batchSlice.arrayBuffer();
 
-            if (rawDataChannel) {
-              rawDataChannel.onbufferedamountlow = onLow;
-            }
-            // Ultra-responsive watchdog ensures the pipe never sits starved
-            timer = setTimeout(onLow, 20);
-          });
+        let batchSubOffset = 0;
+        while (batchSubOffset < batchBuffer.byteLength) {
+          if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') return;
+
+          // Flow control: keep WebRTC pipeline completely saturated
+          if (rawDataChannel.bufferedAmount > BUFFER_CEILING) {
+            await new Promise((resolve) => {
+              let timer = null;
+              const onDrain = () => {
+                if (timer) clearTimeout(timer);
+                if (rawDataChannel) rawDataChannel.onbufferedamountlow = null;
+                resolve();
+              };
+
+              if (rawDataChannel) {
+                rawDataChannel.onbufferedamountlow = onDrain;
+              }
+              // Fast watchdog ensures zero freeze
+              timer = setTimeout(onDrain, 25);
+            });
+          }
+
+          if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') return;
+
+          // Zero-delay RAM slice
+          const sendEnd = Math.min(batchSubOffset + CHUNK_SIZE, batchBuffer.byteLength);
+          const chunk = batchBuffer.slice(batchSubOffset, sendEnd);
+          rawDataChannel.send(chunk);
+
+          batchSubOffset += chunk.byteLength;
+          fileOffset += chunk.byteLength;
+
+          // Rolling speed tracking
+          const speedBps = calculateRollingSpeed(fileOffset);
+          if (speedBps > 0) {
+            targetSpeedBps = speedBps;
+            const remainingBytes = Math.max(0, file.size - fileOffset);
+            const remainingSecs = Math.round(remainingBytes / speedBps);
+            targetEtaText = remainingSecs > 0 ? `ETA: ${remainingSecs}s` : 'Done';
+          }
+
+          targetPercent = Math.min(99.9, (fileOffset / file.size) * 100);
         }
-
-        if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') return;
-
-        const sliceEnd = Math.min(fileOffset + CHUNK_SIZE, file.size);
-        const slice = file.slice(fileOffset, sliceEnd);
-        const chunk = await slice.arrayBuffer();
-
-        rawDataChannel.send(chunk);
-        fileOffset += chunk.byteLength;
-
-        const now = performance.now();
-
-        // High frequency calculation for instant bandwidth tracking
-        if (now - lastSpeedCalc >= 200) {
-          const dt = (now - lastSpeedCalc) / 1000;
-          const db = fileOffset - bytesAtLastSpeedCalc;
-          const instantSpeed = db / dt;
-          targetSpeedBps = instantSpeed;
-
-          bytesAtLastSpeedCalc = fileOffset;
-          lastSpeedCalc = now;
-
-          const remainingBytes = Math.max(0, file.size - fileOffset);
-          const remainingSecs = instantSpeed > 0 ? Math.round(remainingBytes / instantSpeed) : 0;
-          targetEtaText = remainingSecs > 0 ? `ETA: ${remainingSecs}s` : 'Done';
-        }
-
-        targetPercent = Math.min(99.9, (fileOffset / file.size) * 100);
       }
 
       targetStatusText = 'Finalizing transfer...';
