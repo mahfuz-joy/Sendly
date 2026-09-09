@@ -428,7 +428,7 @@
       width: 0%;
       height: 100%;
       background: linear-gradient(90deg, #5b68f6, #10b981);
-      transition: width 0.22s ease-out;
+      transition: width 0.1s linear;
     }
 
     .progress-info {
@@ -667,10 +667,10 @@
     let isSender = false;
     let handshakeTimer = null;
 
-    // High performance and zero micro-stutter streaming limits
-    const CHUNK_SIZE = 128 * 1024; // 128 KB (Halves disk slicing and garbage collection pauses)
-    const BUFFER_CEILING = 2 * 1024 * 1024; // 2 MB high watermark
-    const BUFFER_FLOOR = 512 * 1024; // 512 KB low watermark (instant seamless resumption)
+    // Restored Sweet-Spot: Maximum throughput, lowest latency & zero congestion
+    const CHUNK_SIZE = 64 * 1024; // 64 KB (optimal SCTP frame size, prevents socket buffering)
+    const BUFFER_CEILING = 1.5 * 1024 * 1024; // 1.5 MB high watermark
+    const BUFFER_FLOOR = 256 * 1024; // 256 KB low watermark (instant seamless resumption)
 
     function showToast(message) {
       const toast = document.getElementById('toast');
@@ -993,8 +993,8 @@
             lastSpeedCalc = now;
           }
 
-          // STRICT THROTTLE: Update DOM at most once every 120ms to prevent browser freezing
-          if (now - lastUiUpdate >= 120 || receivedBytes >= meta.size) {
+          // STRICT THROTTLE: Update DOM at most once every 100ms to keep CPU light
+          if (now - lastUiUpdate >= 100 || receivedBytes >= meta.size) {
             lastUiUpdate = now;
             const progress = Math.min(99, Math.round((receivedBytes / meta.size) * 100));
             updateProgressHUD(progress, 'Receiving...');
@@ -1090,7 +1090,7 @@
       while (fileOffset < file.size) {
         if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') return;
 
-        // Flow control without busy-waiting: Clean promise with 60ms timeout watchdog
+        // Flow control without busy-waiting: Clean promise with 35ms watchdog
         if (rawDataChannel.bufferedAmount > BUFFER_CEILING) {
           await new Promise((resolve) => {
             let timer = null;
@@ -1103,8 +1103,8 @@
             if (rawDataChannel) {
               rawDataChannel.onbufferedamountlow = onLow;
             }
-            // Watchdog in case event is missed by browser
-            timer = setTimeout(onLow, 60);
+            // 35ms fast watchdog ensures pipeline never sits idle
+            timer = setTimeout(onLow, 35);
           });
         }
 
@@ -1129,8 +1129,8 @@
           lastSpeedCalc = now;
         }
 
-        // STRICT THROTTLE: Update sender UI at most once every 120ms (zero freezing)
-        if (now - lastUiUpdate >= 120 || fileOffset >= file.size) {
+        // STRICT THROTTLE: Update sender UI at most once every 100ms
+        if (now - lastUiUpdate >= 100 || fileOffset >= file.size) {
           lastUiUpdate = now;
           const progress = Math.min(99, Math.round((fileOffset / file.size) * 100));
           updateProgressHUD(progress, 'Sending file...');
