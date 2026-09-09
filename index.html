@@ -82,8 +82,8 @@
   </script>
 
   <!-- External libraries for WebRTC signaling and QR generation -->
-  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script defer src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
   <style>
     * {
@@ -426,11 +426,14 @@
 
     /* 60FPS Continuous Butter-Smooth Fill via hardware GPU transform */
     #progress-bar-fill {
-      width: 0%;
+      width: 100%;
       height: 100%;
       background: linear-gradient(90deg, #5b68f6, #10b981);
       border-radius: 6px;
-      will-change: width;
+      transform: scaleX(0);
+      transform-origin: left center;
+      will-change: transform;
+      contain: layout paint;
     }
 
     .progress-info {
@@ -628,9 +631,26 @@
   </div>
 
   <script>
-    // Robust STUN and TURN servers for reliable WebRTC connections
+    /*
+      SENDLY — High Throughput / Low UI Jank transfer engine
+
+      What changed from the original:
+      - No requestAnimationFrame loop. UI is rendered at 5 FPS (not 60 FPS).
+      - Much larger WebRTC send window with real bufferedAmount backpressure.
+      - Adaptive chunk size based on the negotiated SCTP max message size.
+      - One read-ahead buffer keeps disk/file reads from starving the data channel.
+      - No per-chunk DOM updates, JSON parsing, or expensive layout work.
+      - Receiver stores binary chunks only; Blob/download work is deferred until after
+        the last network message handler returns.
+      - Better cancel/error cleanup and protection against stale channel handlers.
+      - The transfer remains RELIABLE; speed is improved by pacing the data channel
+        instead of flooding it.
+    */
+
     const PEER_CONFIG = {
       config: {
+        // ICE will prefer a direct host/srflx path when possible.
+        // TURN remains a fallback for networks that cannot establish P2P directly.
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
@@ -651,30 +671,32 @@
     let isCancelled = false;
     let isSender = false;
 
-    // Constants for Extreme Speed + Zero Freeze Architecture
-    const CHUNK_SIZE = 64 * 1024;            // 64 KB (Maximum safety for strict SCTP limits)
-    const BATCH_SIZE = 4 * 1024 * 1024;      // 4 MB RAM read block
-    const BUFFER_CEILING = 2 * 1024 * 1024;  // 2 MB wait threshold
-    const BUFFER_FLOOR = 512 * 1024;         // 512 KB resume threshold
-
-    // Global Transfer Trackers (Math offloaded from main thread)
     let currentBytesTransferred = 0;
     let totalBytesToTransfer = 0;
 
-    // 60FPS Continuous UI Smoothing State
+    // UI is intentionally low-frequency to keep transfers smooth.
+    let uiTimer = null;
+    let uiLastBytes = 0;
+    let uiLastTime = 0;
+    let speedEmaBps = 0;
+
     let displayPercent = 0;
-    let targetPercent = 0;
-    let displaySpeedBps = 0;
-    let targetSpeedBps = 0;
     let targetStatusText = 'Connecting...';
     let targetEtaText = 'ETA: calculating...';
-    let animationFrameId = null;
+
+    const UI_INTERVAL_MS = 200;
+    const SEND_HIGH_WATER = 12 * 1024 * 1024; // 12 MB
+    const SEND_LOW_WATER = 3 * 1024 * 1024;  // 3 MB
+    const DEFAULT_CHUNK_SIZE = 512 * 1024;   // 512 KB
+    const MIN_CHUNK_SIZE = 64 * 1024;        // 64 KB
+    const MAX_CHUNK_SIZE = 512 * 1024;       // 512 KB
 
     function showToast(message) {
       const toast = document.getElementById('toast');
       toast.innerText = message;
       toast.classList.add('show');
-      setTimeout(() => { toast.classList.remove('show'); }, 2500);
+      clearTimeout(showToast._timer);
+      showToast._timer = setTimeout(() => toast.classList.remove('show'), 2500);
     }
 
     function generateSixDigitCode() {
@@ -684,9 +706,9 @@
     function formatBytes(bytes) {
       if (!bytes || bytes === 0) return '0 B';
       const k = 1024;
-      const sizes = ['B', 'KB', 'MB', 'GB'];
-      const i = Math.floor(Math.log(bytes) / Math.log(k));
-      return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
+      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
+      return (bytes / Math.pow(k, i)).toFixed(i === 0 ? 0 : 1) + ' ' + sizes[i];
     }
 
     function showView(viewId) {
@@ -696,109 +718,136 @@
       document.getElementById(viewId).classList.remove('hidden');
     }
 
-    // Offloads math from data-pipeline to GPU rendering loop
-    function startSmoothUiLoop() {
-      if (animationFrameId) cancelAnimationFrame(animationFrameId);
-
-      let lastTime = performance.now();
-      let lastBytes = currentBytesTransferred;
-
-      const updateLoop = (timeNow) => {
-        // Calculate real-time speed every 150ms to keep math extremely light
-        if (timeNow - lastTime > 150 && targetStatusText !== 'Delivered') {
-          const dt = (timeNow - lastTime) / 1000;
-          const db = currentBytesTransferred - lastBytes;
-          
-          let currentInstantSpeed = 0;
-          if (dt > 0) currentInstantSpeed = db / dt;
-          
-          // Exponential Moving Average (EMA) for rock-steady speed text
-          targetSpeedBps = (targetSpeedBps * 0.7) + (currentInstantSpeed * 0.3);
-          
-          lastTime = timeNow;
-          lastBytes = currentBytesTransferred;
-
-          if (targetSpeedBps > 0 && totalBytesToTransfer > 0) {
-            const remaining = Math.max(0, totalBytesToTransfer - currentBytesTransferred);
-            const secs = Math.round(remaining / targetSpeedBps);
-            targetEtaText = secs > 0 ? `ETA: ${secs}s` : 'Done';
-          }
-        }
-
-        // Percentage calculations
-        let realPercent = totalBytesToTransfer > 0 ? (currentBytesTransferred / totalBytesToTransfer) * 100 : 0;
-        targetPercent = Math.min(99.9, realPercent);
-        if (targetStatusText === 'Delivered') targetPercent = 100;
-
-        // Easing physics
-        displayPercent += (targetPercent - displayPercent) * 0.15;
-        if (Math.abs(targetPercent - displayPercent) < 0.05) displayPercent = targetPercent;
-        displaySpeedBps += (targetSpeedBps - displaySpeedBps) * 0.12;
-
-        // DOM Updates
-        const fill = document.getElementById('progress-bar-fill');
-        const pctLabel = document.getElementById('transfer-percentage');
-        const statusLabel = document.getElementById('transfer-status');
-        const speedLabel = document.getElementById('transfer-speed');
-        const etaLabel = document.getElementById('transfer-eta');
-
-        if (fill) fill.style.width = displayPercent.toFixed(2) + '%';
-        if (pctLabel) pctLabel.innerText = Math.floor(displayPercent) + '%';
-        if (statusLabel) statusLabel.innerText = targetStatusText;
-
-        if (speedLabel && targetStatusText !== 'Delivered') {
-          if (displaySpeedBps >= 1024 * 1024) {
-            speedLabel.innerText = (displaySpeedBps / (1024 * 1024)).toFixed(1) + ' MB/s';
-          } else if (displaySpeedBps > 0) {
-            speedLabel.innerText = (displaySpeedBps / 1024).toFixed(0) + ' KB/s';
-          } else {
-            speedLabel.innerText = '0.0 MB/s';
-          }
-        }
-        if (etaLabel && targetStatusText !== 'Delivered') {
-          etaLabel.innerText = targetEtaText;
-        }
-
-        if (!isCancelled) animationFrameId = requestAnimationFrame(updateLoop);
-      };
-
-      animationFrameId = requestAnimationFrame(updateLoop);
+    function setProgressPercent(percent) {
+      const p = Math.max(0, Math.min(100, percent));
+      const fill = document.getElementById('progress-bar-fill');
+      const pct = document.getElementById('transfer-percentage');
+      if (fill) fill.style.transform = `scaleX(${p / 100})`;
+      if (pct) pct.innerText = Math.floor(p) + '%';
+      displayPercent = p;
     }
 
-    function stopSmoothUiLoop() {
-      if (animationFrameId) {
-        cancelAnimationFrame(animationFrameId);
-        animationFrameId = null;
+    function renderTransferUI(force = false) {
+      const now = performance.now();
+      if (!force && uiLastTime && now - uiLastTime < UI_INTERVAL_MS) return;
+
+      const dt = uiLastTime ? (now - uiLastTime) / 1000 : 0;
+      const db = currentBytesTransferred - uiLastBytes;
+
+      if (dt > 0) {
+        const instant = Math.max(0, db / dt);
+        // EMA avoids noisy speed values without touching the transfer itself.
+        speedEmaBps = speedEmaBps === 0 ? instant : (speedEmaBps * 0.72 + instant * 0.28);
+      }
+
+      uiLastTime = now;
+      uiLastBytes = currentBytesTransferred;
+
+      const realPercent = totalBytesToTransfer > 0
+        ? (currentBytesTransferred / totalBytesToTransfer) * 100
+        : 0;
+
+      setProgressPercent(targetStatusText === 'Delivered' ? 100 : Math.min(99.9, realPercent));
+
+      const status = document.getElementById('transfer-status');
+      const speed = document.getElementById('transfer-speed');
+      const eta = document.getElementById('transfer-eta');
+
+      if (status) status.innerText = targetStatusText;
+
+      if (speed) {
+        if (targetStatusText === 'Delivered') {
+          speed.innerText = 'Complete';
+        } else if (speedEmaBps >= 1024 * 1024) {
+          speed.innerText = (speedEmaBps / (1024 * 1024)).toFixed(1) + ' MB/s';
+        } else if (speedEmaBps >= 1024) {
+          speed.innerText = (speedEmaBps / 1024).toFixed(0) + ' KB/s';
+        } else {
+          speed.innerText = '0 KB/s';
+        }
+      }
+
+      if (eta) {
+        if (targetStatusText === 'Delivered') {
+          eta.innerText = '';
+        } else if (speedEmaBps > 0 && totalBytesToTransfer > 0) {
+          const remaining = Math.max(0, totalBytesToTransfer - currentBytesTransferred);
+          const secs = Math.ceil(remaining / speedEmaBps);
+          eta.innerText = secs > 0 ? `ETA: ${secs}s` : 'ETA: <1s';
+        } else {
+          eta.innerText = targetEtaText;
+        }
+      }
+    }
+
+    function startUiLoop() {
+      stopUiLoop();
+      uiLastBytes = currentBytesTransferred;
+      uiLastTime = performance.now();
+      speedEmaBps = 0;
+      uiTimer = setInterval(() => {
+        if (!isCancelled) renderTransferUI(false);
+      }, UI_INTERVAL_MS);
+      renderTransferUI(true);
+    }
+
+    function stopUiLoop() {
+      if (uiTimer) {
+        clearInterval(uiTimer);
+        uiTimer = null;
+      }
+    }
+
+    function cleanupChannel() {
+      const dc = rawDataChannel;
+      rawDataChannel = null;
+
+      if (dc) {
+        try {
+          dc.onmessage = null;
+          dc.onopen = null;
+          dc.onclose = null;
+          dc.onerror = null;
+          dc.onbufferedamountlow = null;
+          if (dc.readyState !== 'closed') dc.close();
+        } catch (_) {}
       }
     }
 
     function cancelAndReset() {
       isCancelled = true;
-      stopSmoothUiLoop();
+      stopUiLoop();
 
       if (rawDataChannel && rawDataChannel.readyState === 'open') {
-        try {
-          rawDataChannel.send(JSON.stringify({ type: 'control-cancel' }));
-          rawDataChannel.close();
-        } catch (e) {}
+        try { rawDataChannel.send(JSON.stringify({ type: 'control-cancel' })); } catch (_) {}
       }
+
+      cleanupChannel();
+
       if (activeConnection) {
-        try { activeConnection.close(); } catch (e) {}
+        try { activeConnection.close(); } catch (_) {}
         activeConnection = null;
       }
+
       if (peer) {
-        try { peer.destroy(); } catch (e) {}
+        try { peer.destroy(); } catch (_) {}
         peer = null;
       }
-      rawDataChannel = null;
+
       selectedFile = null;
-      document.getElementById('hidden-file-input').value = '';
+      currentBytesTransferred = 0;
+      totalBytesToTransfer = 0;
+      displayPercent = 0;
+
+      const input = document.getElementById('hidden-file-input');
+      if (input) input.value = '';
+
       showView('view-home');
     }
 
     function sendAnotherFile() {
       cancelAndReset();
-      setTimeout(() => { document.getElementById('hidden-file-input').click(); }, 150);
+      setTimeout(() => document.getElementById('hidden-file-input').click(), 120);
     }
 
     function openReceiveView() {
@@ -808,80 +857,177 @@
       if (!peer) initReceiverPeer();
     }
 
-    function onFilePicked(event) {
-      const file = event.target.files[0];
+    function waitForPeerJs(timeoutMs = 12000) {
+      return new Promise((resolve, reject) => {
+        const start = performance.now();
+        (function check() {
+          if (window.Peer) return resolve();
+          if (performance.now() - start >= timeoutMs) {
+            reject(new Error('PeerJS library did not load.'));
+            return;
+          }
+          setTimeout(check, 30);
+        })();
+      });
+    }
+
+    async function onFilePicked(event) {
+      const file = event.target.files && event.target.files[0];
       if (!file) return;
+
       selectedFile = file;
       isCancelled = false;
       isSender = true;
 
+      try {
+        await waitForPeerJs();
+      } catch (e) {
+        showToast('Connection library failed to load.');
+        return;
+      }
+
       const code = generateSixDigitCode();
       const peerId = 'sendly-' + code;
 
-      if (peer) peer.destroy();
+      if (peer) {
+        try { peer.destroy(); } catch (_) {}
+      }
+
       peer = new Peer(peerId, PEER_CONFIG);
 
-      peer.on('error', (err) => showToast('Connection error: ' + err.type));
+      peer.on('error', (err) => {
+        console.error('Peer error:', err);
+        showToast('Connection error: ' + (err.type || 'unknown'));
+      });
 
       peer.on('open', () => {
-        document.getElementById('display-code').innerText = code;
+        const codeEl = document.getElementById('display-code');
+        codeEl.innerText = code;
         showView('view-send');
 
         const qrContainer = document.getElementById('qrcode');
         qrContainer.innerHTML = '';
-        const shareUrl = `${window.location.origin}${window.location.pathname}?code=${code}`;
-        new QRCode(qrContainer, {
-          text: shareUrl, width: 160, height: 160,
-          colorDark: '#000000', colorLight: '#ffffff'
-        });
+
+        if (window.QRCode) {
+          const shareUrl = `${window.location.origin}${window.location.pathname}?code=${code}`;
+          new QRCode(qrContainer, {
+            text: shareUrl,
+            width: 160,
+            height: 160,
+            colorDark: '#000000',
+            colorLight: '#ffffff'
+          });
+        }
       });
 
       peer.on('connection', (conn) => {
+        // Only one active file transfer at a time.
+        if (activeConnection && activeConnection !== conn) {
+          try { conn.close(); } catch (_) {}
+          return;
+        }
+
         activeConnection = conn;
+
         const onOpen = () => {
-          rawDataChannel = activeConnection.dataChannel;
-          rawDataChannel.binaryType = 'arraybuffer';
-          setupRawSenderChannel(selectedFile);
+          if (!activeConnection || activeConnection !== conn || isCancelled) return;
+          try {
+            rawDataChannel = conn.dataChannel;
+            rawDataChannel.binaryType = 'arraybuffer';
+            setupRawSenderChannel(file);
+          } catch (e) {
+            console.error(e);
+            showToast('Unable to start transfer.');
+          }
         };
-        if (activeConnection.open) onOpen();
-        else activeConnection.on('open', onOpen);
-        activeConnection.on('error', () => showToast('Data channel error.'));
+
+        if (conn.open) onOpen();
+        else conn.on('open', onOpen);
+
+        conn.on('error', (err) => {
+          console.error('Data connection error:', err);
+          showToast('Data channel error.');
+        });
+
+        conn.on('close', () => {
+          if (!isCancelled && targetStatusText !== 'Delivered') {
+            showToast('Connection closed.');
+          }
+        });
       });
     }
 
     function copyShareLink() {
       const code = document.getElementById('display-code').innerText;
       const shareUrl = `${window.location.origin}${window.location.pathname}?code=${code}`;
-      const tempInput = document.createElement('input');
-      tempInput.value = shareUrl;
-      document.body.appendChild(tempInput);
-      tempInput.select();
+
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(shareUrl)
+          .then(() => showToast('Share link copied!'))
+          .catch(() => fallbackCopy(shareUrl));
+      } else {
+        fallbackCopy(shareUrl);
+      }
+    }
+
+    function fallbackCopy(text) {
+      const input = document.createElement('input');
+      input.value = text;
+      input.style.position = 'fixed';
+      input.style.opacity = '0';
+      document.body.appendChild(input);
+      input.select();
       try {
         document.execCommand('copy');
         showToast('Share link copied!');
-      } catch (e) {
-        showToast('Link copied to clipboard!');
+      } catch (_) {
+        showToast('Copy failed.');
       }
-      document.body.removeChild(tempInput);
+      input.remove();
     }
 
     function initReceiverPeer() {
+      if (!window.Peer) {
+        waitForPeerJs().then(initReceiverPeer).catch(() => showToast('Connection library failed to load.'));
+        return;
+      }
+
       peer = new Peer(PEER_CONFIG);
-      peer.on('error', (err) => showToast('Network error: ' + err.type));
+      peer.on('error', (err) => {
+        console.error('Receiver peer error:', err);
+        showToast('Network error: ' + (err.type || 'unknown'));
+      });
     }
 
     function setupOtpInputs() {
       const inputs = document.querySelectorAll('.otp-input');
+
       inputs.forEach((input, idx) => {
         input.value = '';
+
         input.oninput = (e) => {
-          if (e.target.value.length === 1 && idx < inputs.length - 1) inputs[idx + 1].focus();
+          e.target.value = e.target.value.replace(/\D/g, '').slice(0, 1);
+          if (e.target.value && idx < inputs.length - 1) inputs[idx + 1].focus();
           checkOtpFilled();
         };
+
         input.onkeydown = (e) => {
-          if (e.key === 'Backspace' && !e.target.value && idx > 0) inputs[idx - 1].focus();
+          if (e.key === 'Backspace' && !e.target.value && idx > 0) {
+            inputs[idx - 1].focus();
+          }
+        };
+
+        input.onpaste = (e) => {
+          e.preventDefault();
+          const pasted = (e.clipboardData || window.clipboardData).getData('text').replace(/\D/g, '').slice(0, 6);
+          pasted.split('').forEach((digit, i) => {
+            if (inputs[i]) inputs[i].value = digit;
+          });
+          checkOtpFilled();
+          if (pasted.length === 6) inputs[5].focus();
         };
       });
+
       inputs[0].focus();
     }
 
@@ -892,49 +1038,75 @@
       document.getElementById('btn-connect').disabled = fullCode.length !== 6;
     }
 
-    function connectWithCode(customCode = null) {
+    async function connectWithCode(customCode = null) {
       let targetCode = customCode;
+
       if (!targetCode) {
         const inputs = document.querySelectorAll('.otp-input');
         targetCode = '';
         inputs.forEach(i => targetCode += i.value);
       }
 
-      if (targetCode.length !== 6) return;
+      if (!/^\d{6}$/.test(targetCode)) return;
+
       isCancelled = false;
+
+      try {
+        await waitForPeerJs();
+      } catch (_) {
+        showToast('Connection library failed to load.');
+        return;
+      }
 
       const targetPeerId = 'sendly-' + targetCode;
       initTransferView('RECEIVING FILE', 'Connecting to sender...', 0);
 
-      if (!peer) peer = new Peer(PEER_CONFIG);
+      if (!peer || peer.destroyed) {
+        initReceiverPeer();
+      }
 
-      if (peer.open) {
-        makeReceiverCall(targetPeerId);
-      } else {
-        peer.on('open', () => makeReceiverCall(targetPeerId));
+      const startConnection = () => makeReceiverCall(targetPeerId);
+
+      if (peer && peer.open) startConnection();
+      else if (peer) peer.once('open', startConnection);
+      else {
+        showToast('Unable to initialize network.');
+        cancelAndReset();
       }
     }
 
     function makeReceiverCall(targetPeerId) {
-      activeConnection = peer.connect(targetPeerId, { reliable: true });
+      activeConnection = peer.connect(targetPeerId, {
+        reliable: true
+      });
 
       const onOpen = () => {
-        rawDataChannel = activeConnection.dataChannel;
-        rawDataChannel.binaryType = 'arraybuffer';
-        setupRawReceiverChannel();
+        if (!activeConnection || isCancelled) return;
+
+        try {
+          rawDataChannel = activeConnection.dataChannel;
+          rawDataChannel.binaryType = 'arraybuffer';
+          setupRawReceiverChannel();
+        } catch (e) {
+          console.error(e);
+          showToast('Unable to open data channel.');
+        }
       };
 
       if (activeConnection.open) onOpen();
       else activeConnection.on('open', onOpen);
 
-      activeConnection.on('error', () => {
+      activeConnection.on('error', (err) => {
+        console.error('Receiver data connection error:', err);
         targetStatusText = 'Failed to connect.';
+        renderTransferUI(true);
         showToast('Connection failed.');
       });
     }
 
     function initTransferView(title, statusText, percent, fileName = 'Connecting...', fileSize = 0) {
       showView('view-transfer');
+
       document.getElementById('transfer-screen-title').innerText = title;
       document.getElementById('meta-filename').innerText = fileName;
       document.getElementById('meta-filesize').innerText = formatBytes(fileSize);
@@ -944,26 +1116,23 @@
       document.getElementById('transfer-actions').classList.remove('hidden');
       document.getElementById('completion-actions').classList.add('hidden');
 
-      displayPercent = percent; targetPercent = percent;
-      displaySpeedBps = 0; targetSpeedBps = 0;
+      currentBytesTransferred = Math.max(0, percent * fileSize / 100);
+      totalBytesToTransfer = fileSize;
       targetStatusText = statusText;
       targetEtaText = 'ETA: calculating...';
 
-      startSmoothUiLoop();
+      setProgressPercent(percent);
+      startUiLoop();
     }
 
     function showTransferComplete() {
-      targetPercent = 100;
       targetStatusText = 'Delivered';
+      targetEtaText = '';
 
-      const fill = document.getElementById('progress-bar-fill');
-      if (fill) fill.style.width = '100%';
-      document.getElementById('transfer-percentage').innerText = '100%';
-      document.getElementById('transfer-status').innerText = 'Delivered';
-      document.getElementById('transfer-speed').innerText = 'Complete';
-      document.getElementById('transfer-eta').innerText = '';
-
-      stopSmoothUiLoop();
+      currentBytesTransferred = totalBytesToTransfer;
+      setProgressPercent(100);
+      renderTransferUI(true);
+      stopUiLoop();
 
       document.getElementById('transfer-icon-area').classList.add('hidden');
       document.getElementById('completion-box').classList.remove('hidden');
@@ -971,71 +1140,190 @@
       document.getElementById('completion-actions').classList.remove('hidden');
     }
 
+    function getOptimalChunkSize() {
+      try {
+        const pc = activeConnection && activeConnection.peerConnection;
+        const maxMessage = pc && pc.sctp && pc.sctp.maxMessageSize;
+
+        // maxMessageSize can be Infinity / 0 depending on browser.
+        if (Number.isFinite(maxMessage) && maxMessage > 0) {
+          // Keep a safety margin for SCTP implementations.
+          return Math.max(
+            MIN_CHUNK_SIZE,
+            Math.min(MAX_CHUNK_SIZE, Math.floor(maxMessage * 0.75))
+          );
+        }
+      } catch (_) {}
+      return DEFAULT_CHUNK_SIZE;
+    }
+
+    function waitForBufferedAmountLow(dc, threshold) {
+      if (!dc || dc.readyState !== 'open' || dc.bufferedAmount <= threshold) {
+        return Promise.resolve();
+      }
+
+      return new Promise((resolve) => {
+        let settled = false;
+        let pollTimer = null;
+
+        const cleanup = () => {
+          if (pollTimer) clearInterval(pollTimer);
+          try { dc.removeEventListener('bufferedamountlow', onLow); } catch (_) {}
+        };
+
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve();
+        };
+
+        const onLow = () => {
+          if (dc.bufferedAmount <= threshold || dc.readyState !== 'open') finish();
+        };
+
+        try { dc.addEventListener('bufferedamountlow', onLow); } catch (_) {}
+
+        // Safety fallback: some browsers can miss the low event around rapid
+        // buffer transitions, so poll very lightly without blocking the UI.
+        pollTimer = setInterval(() => {
+          if (!dc || dc.readyState !== 'open' || dc.bufferedAmount <= threshold) finish();
+        }, 20);
+      });
+    }
+
     function setupRawReceiverChannel() {
       let receivedChunks = [];
       let meta = null;
+      let completed = false;
+
       currentBytesTransferred = 0;
       totalBytesToTransfer = 0;
 
       rawDataChannel.onmessage = (event) => {
-        if (isCancelled) return;
+        if (isCancelled || completed) return;
+
         const data = event.data;
 
         if (typeof data === 'string') {
-          try {
-            const msg = JSON.parse(data);
-            if (msg.type === 'file-meta') {
-              meta = msg;
-              receivedChunks = [];
-              currentBytesTransferred = 0;
-              totalBytesToTransfer = meta.size;
-              initTransferView('RECEIVING FILE', 'Receiving file...', 0, meta.name, meta.size);
+          let msg;
+          try { msg = JSON.parse(data); } catch (_) { return; }
+
+          if (msg.type === 'file-meta') {
+            meta = msg;
+            receivedChunks = [];
+            currentBytesTransferred = 0;
+            totalBytesToTransfer = meta.size || 0;
+
+            initTransferView(
+              'RECEIVING FILE',
+              'Receiving file...',
+              0,
+              meta.name || 'file',
+              meta.size || 0
+            );
+
+            try {
               rawDataChannel.send(JSON.stringify({ type: 'file-meta-ack' }));
-            } else if (msg.type === 'control-cancel') {
-              showToast('Sender cancelled the transfer.');
-              cancelAndReset();
-            }
-          } catch (e) {}
+            } catch (_) {}
+          }
+
+          if (msg.type === 'control-cancel') {
+            showToast('Sender cancelled the transfer.');
+            cancelAndReset();
+          }
+
           return;
         }
 
-        // Receiving binary stream chunks (Pure logic, no heavy math here)
-        if (data instanceof ArrayBuffer && meta) {
+        if (!meta) return;
+
+        // PeerJS normally delivers ArrayBuffer when binaryType is arraybuffer.
+        // Blob is handled as a safety fallback.
+        if (data instanceof ArrayBuffer) {
           receivedChunks.push(data);
           currentBytesTransferred += data.byteLength;
-          targetStatusText = 'Receiving...';
+        } else if (data instanceof Blob) {
+          receivedChunks.push(data);
+          currentBytesTransferred += data.size;
+        } else if (ArrayBuffer.isView(data)) {
+          const copy = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+          receivedChunks.push(copy);
+          currentBytesTransferred += data.byteLength;
+        } else {
+          return;
+        }
 
-          if (currentBytesTransferred >= meta.size) {
-            targetStatusText = 'Saving to device...';
+        targetStatusText = currentBytesTransferred >= meta.size
+          ? 'Saving to device...'
+          : 'Receiving...';
 
-            try { rawDataChannel.send(JSON.stringify({ type: 'file-done' })); } catch (e) {}
+        // Do not create the final Blob inside the message event. Let the event
+        // queue drain first so the renderer/network stack gets breathing room.
+        if (currentBytesTransferred >= meta.size) {
+          completed = true;
 
-            const blob = new Blob(receivedChunks, { type: meta.fileType || 'application/octet-stream' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.style.display = 'none';
-            a.href = url;
-            a.download = meta.name;
-            document.body.appendChild(a);
-            a.click();
-            setTimeout(() => {
-              document.body.removeChild(a);
-              URL.revokeObjectURL(url);
-            }, 10000);
+          try { rawDataChannel.send(JSON.stringify({ type: 'file-done' })); } catch (_) {}
 
-            showTransferComplete();
-          }
+          const parts = receivedChunks;
+          receivedChunks = [];
+
+          setTimeout(() => saveReceivedFile(parts, meta), 0);
         }
       };
     }
 
+    async function saveReceivedFile(parts, meta) {
+      if (isCancelled) return;
+
+      targetStatusText = 'Saving to device...';
+      renderTransferUI(true);
+
+      try {
+        // Blob construction is done after the receive message handler returns.
+        const blob = new Blob(parts, {
+          type: meta.fileType || 'application/octet-stream'
+        });
+
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = meta.name || 'download';
+        document.body.appendChild(a);
+        a.click();
+
+        setTimeout(() => {
+          try { a.remove(); } catch (_) {}
+          URL.revokeObjectURL(url);
+        }, 60000);
+
+        // Release references as early as possible.
+        parts.length = 0;
+        showTransferComplete();
+      } catch (e) {
+        console.error('Save error:', e);
+        targetStatusText = 'Save failed.';
+        renderTransferUI(true);
+        showToast('Could not save the received file.');
+      }
+    }
+
     function setupRawSenderChannel(file) {
-      initTransferView('SENDING FILE', 'Connecting to receiver...', 0, file.name, file.size);
-      let isTransferring = false;
+      initTransferView(
+        'SENDING FILE',
+        'Connecting to receiver...',
+        0,
+        file.name,
+        file.size
+      );
+
+      let started = false;
       let handshakeTimer = null;
 
       const sendMeta = () => {
-        if (isCancelled || isTransferring) return;
+        if (isCancelled || started) return;
+
         try {
           if (rawDataChannel && rawDataChannel.readyState === 'open') {
             rawDataChannel.send(JSON.stringify({
@@ -1045,86 +1333,114 @@
               fileType: file.type || 'application/octet-stream'
             }));
           }
-        } catch (e) {}
+        } catch (_) {}
       };
 
       sendMeta();
-      handshakeTimer = setInterval(sendMeta, 250);
+      handshakeTimer = setInterval(sendMeta, 500);
 
       rawDataChannel.onmessage = (event) => {
-        if (typeof event.data === 'string') {
-          try {
-            const msg = JSON.parse(event.data);
-            if (msg.type === 'file-meta-ack') {
-              if (handshakeTimer) clearInterval(handshakeTimer);
-              if (!isTransferring) {
-                isTransferring = true;
-                pumpStreamMaximumThroughput(file);
+        if (typeof event.data !== 'string') return;
+
+        let msg;
+        try { msg = JSON.parse(event.data); } catch (_) { return; }
+
+        if (msg.type === 'file-meta-ack') {
+          if (handshakeTimer) {
+            clearInterval(handshakeTimer);
+            handshakeTimer = null;
+          }
+
+          if (!started && !isCancelled) {
+            started = true;
+            pumpStreamMaximumThroughput(file).catch((err) => {
+              console.error('Send error:', err);
+              if (!isCancelled) {
+                targetStatusText = 'Transfer failed.';
+                renderTransferUI(true);
+                showToast('Transfer failed.');
               }
-            } else if (msg.type === 'file-done') {
-              showTransferComplete();
-            } else if (msg.type === 'control-cancel') {
-              showToast('Receiver cancelled the transfer.');
-              cancelAndReset();
-            }
-          } catch (e) {}
+            });
+          }
+        } else if (msg.type === 'file-done') {
+          showTransferComplete();
+        } else if (msg.type === 'control-cancel') {
+          showToast('Receiver cancelled the transfer.');
+          cancelAndReset();
         }
       };
     }
 
     async function pumpStreamMaximumThroughput(file) {
+      if (!rawDataChannel || rawDataChannel.readyState !== 'open') return;
+
       currentBytesTransferred = 0;
       totalBytesToTransfer = file.size;
       targetStatusText = 'Sending file...';
+      renderTransferUI(true);
 
-      // STRICT BACKPRESSURE LIMITS - Solves the 5 KB/s Network Collapse Issue
-      const SAFE_CHUNK = 64 * 1024;     // 64 KB chunks (Safest for WebRTC)
-      const MAX_BUFFER = 1024 * 1024;   // 1 MB max buffer (Prevents SCTP choking)
+      const dc = rawDataChannel;
+      const chunkSize = getOptimalChunkSize();
 
-      if (rawDataChannel) {
-        rawDataChannel.bufferedAmountLowThreshold = MAX_BUFFER / 2; // 512 KB
-      }
+      try {
+        dc.bufferedAmountLowThreshold = SEND_LOW_WATER;
+      } catch (_) {}
 
-      let fileOffset = 0;
+      let offset = 0;
 
-      while (fileOffset < file.size) {
+      // Read ahead one chunk while the previous chunk is being sent.
+      let nextOffset = Math.min(file.size, offset + chunkSize);
+      let nextBufferPromise = file.slice(offset, nextOffset).arrayBuffer();
+
+      while (offset < file.size) {
         if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') return;
 
-        // Strict backpressure wait WITHOUT timeouts. Timeouts cause the 5 KB/s crash!
-        if (rawDataChannel.bufferedAmount >= MAX_BUFFER) {
-          await new Promise((resolve) => {
-            rawDataChannel.onbufferedamountlow = () => {
-              rawDataChannel.onbufferedamountlow = null;
-              resolve();
-            };
-          });
+        // Backpressure: wait only when the browser's SCTP buffer is genuinely full.
+        if (dc.bufferedAmount >= SEND_HIGH_WATER) {
+          await waitForBufferedAmountLow(dc, SEND_LOW_WATER);
+          if (isCancelled || dc.readyState !== 'open') return;
         }
 
-        if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') return;
+        const buffer = await nextBufferPromise;
+        const sentBytes = buffer.byteLength;
+        if (!sentBytes) break;
 
-        const sendEnd = Math.min(fileOffset + SAFE_CHUNK, file.size);
-        const chunkSlice = file.slice(fileOffset, sendEnd);
-        const chunkBuffer = await chunkSlice.arrayBuffer();
+        dc.send(buffer);
+        offset += sentBytes;
+        currentBytesTransferred = offset;
 
-        rawDataChannel.send(chunkBuffer);
+        // Start reading the next slice immediately. This overlaps file I/O with
+        // network draining without ever loading the whole file into RAM.
+        nextOffset = Math.min(file.size, offset + chunkSize);
+        if (offset < file.size) {
+          nextBufferPromise = file.slice(offset, nextOffset).arrayBuffer();
+        }
 
-        fileOffset += chunkBuffer.byteLength;
-        currentBytesTransferred = fileOffset; // Update sender UI smoothly based on sent data
+        // Occasionally return control to the event loop. This is intentionally
+        // infrequent; too many yields reduce throughput on fast Wi-Fi.
+        if ((offset / chunkSize) % 32 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
       }
 
-      targetStatusText = 'Finalizing transfer...';
+      targetStatusText = 'Waiting for receiver...';
+      renderTransferUI(true);
     }
 
     window.addEventListener('DOMContentLoaded', () => {
       const urlParams = new URLSearchParams(window.location.search);
-      const autoCode = urlParams.get('code');
-      if (autoCode && autoCode.length === 6) {
+      const autoCode = (urlParams.get('code') || '').replace(/\D/g, '');
+
+      if (autoCode.length === 6) {
         openReceiveView();
+
         const inputs = document.querySelectorAll('.otp-input');
         autoCode.split('').forEach((digit, idx) => {
           if (inputs[idx]) inputs[idx].value = digit;
         });
-        connectWithCode(autoCode);
+
+        // Delay very slightly so the deferred PeerJS library has a chance to load.
+        setTimeout(() => connectWithCode(autoCode), 80);
       }
     });
   </script>
