@@ -627,7 +627,7 @@
   </div>
 
   <script>
-    // Robust STUN and TURN servers for reliable WebRTC connections
+    // Robust STUN and Metered TURN servers for reliable WebRTC connections
     const PEER_CONFIG = {
       config: {
         iceServers: [
@@ -669,9 +669,10 @@
     let isCancelled = false;
     let isSender = false;
 
-    // High speed optimized buffer and chunk sizes
-    const CHUNK_SIZE = 1024 * 1024; // 1 MB
-    const BATCH_SIZE = 8 * 1024 * 1024; // 8 MB
+    // Stable High-Speed WebRTC Settings:
+    // 64 KB chunks avoid browser buffer stalls and prevent packet loss, ensuring a steady, smooth pipeline.
+    const CHUNK_SIZE = 64 * 1024; // 64 KB (Sweet spot for WebRTC stability)
+    const BATCH_SIZE = 2 * 1024 * 1024; // 2 MB
 
     let speedTracker = {
       lastTime: 0,
@@ -1009,8 +1010,8 @@
         }
       };
 
-      // Increased threshold to keep pipeline fully utilized
-      rawDataChannel.bufferedAmountLowThreshold = 8 * 1024 * 1024; // 8 MB
+      // 1 MB threshold prevents buffer clogging and keeps the queue streaming seamlessly
+      rawDataChannel.bufferedAmountLowThreshold = 1024 * 1024; // 1 MB
 
       let fileOffset = 0;
       speedTracker.lastTime = performance.now();
@@ -1028,6 +1029,7 @@
           while (batchSubOffset < batchBuffer.byteLength) {
             if (isCancelled) return;
 
+            // Wait when the browser socket buffer reaches threshold
             if (rawDataChannel.bufferedAmount > rawDataChannel.bufferedAmountLowThreshold) {
               await new Promise((resolve) => {
                 rawDataChannel.onbufferedamountlow = () => {
