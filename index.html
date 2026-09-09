@@ -295,7 +295,7 @@
       font-size: 22px;
       font-weight: 700;
       outline: none;
-      transition: border-color: 0.2s, box-shadow 0.2s;
+      transition: border-color 0.2s, box-shadow 0.2s;
     }
     .otp-input:focus {
       border-color: #5b68f6;
@@ -373,7 +373,6 @@
       overflow: hidden;
       margin-bottom: 10px;
     }
-    /* 60FPS Continuous Butter-Smooth Fill via hardware GPU transform */
     #progress-bar-fill {
       width: 0%;
       height: 100%;
@@ -589,12 +588,12 @@
     let isCancelled = false;
     let isSender = false;
     let handshakeTimer = null;
-    // Restoring high-speed RAM-batched constants that unlocked 5MB/s
-    const CHUNK_SIZE = 256 * 1024;           // 256 KB chunk size (Peak line throughput)
-    const BATCH_SIZE = 4 * 1024 * 1024;      // 4 MB RAM buffer from disk (Zero disk I/O lag)
-    const BUFFER_CEILING = 4 * 1024 * 1024;  // 4 MB saturation ceiling
-    const BUFFER_FLOOR = 1 * 1024 * 1024;    // 1 MB immediate refill floor
-    // 60FPS Continuous UI Smoothing State
+    // High-speed RAM-batched constants
+    const CHUNK_SIZE = 256 * 1024;           // 256 KB
+    const BATCH_SIZE = 4 * 1024 * 1024;      // 4 MB
+    const BUFFER_CEILING = 4 * 1024 * 1024;  // 4 MB
+    const BUFFER_FLOOR = 1 * 1024 * 1024;    // 1 MB
+    // 60FPS UI Smoothing State
     let displayPercent = 0;
     let targetPercent = 0;
     let displaySpeedBps = 0;
@@ -602,7 +601,6 @@
     let targetStatusText = 'Connecting...';
     let targetEtaText = 'ETA: calculating...';
     let animationFrameId = null;
-    // Rolling Speed Window to prevent artificial speed drops
     let speedHistory = [];
     function showToast(message) {
       const toast = document.getElementById('toast');
@@ -631,7 +629,6 @@
     function calculateRollingSpeed(bytesCurrent) {
       const now = performance.now();
       speedHistory.push({ t: now, b: bytesCurrent });
-      // Keep a 1.2 second sliding window: smooths out network pulse pauses completely
       while (speedHistory.length > 0 && now - speedHistory[0].t > 1200) {
         speedHistory.shift();
       }
@@ -910,12 +907,11 @@
           } catch (e) {}
           return;
         }
-        // Receiving binary stream chunks
         if (data instanceof ArrayBuffer && meta) {
           receivedChunks.push(data);
           receivedBytes += data.byteLength;
 
-          // Throttle UI updates to every ~400KB to keep main thread light
+          // Throttle UI updates
           if (receivedBytes - lastUiUpdate >= 400 * 1024 || receivedBytes >= meta.size) {
             lastUiUpdate = receivedBytes;
             const speedBps = calculateRollingSpeed(receivedBytes);
@@ -998,20 +994,18 @@
       let fileOffset = 0;
       targetStatusText = 'Sending file...';
       speedHistory = [];
+      let lastYield = 0;
+      let lastUiUpdate = 0;
 
       if (rawDataChannel) {
         rawDataChannel.bufferedAmountLowThreshold = BUFFER_FLOOR;
       }
 
-      // Extremely cheap yield that still keeps peak speed
-      const yieldToBrowser = () => new Promise(r => {
-        queueMicrotask(() => setTimeout(r, 0));
-      });
+      const yieldToBrowser = () => new Promise(r => setTimeout(r, 0));
 
       while (fileOffset < file.size) {
         if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') return;
 
-        // Read 4 MB into RAM at once (same high-speed batch)
         const batchEnd = Math.min(fileOffset + BATCH_SIZE, file.size);
         const batchSlice = file.slice(fileOffset, batchEnd);
         const batchBuffer = await batchSlice.arrayBuffer();
@@ -1021,7 +1015,6 @@
         while (batchSubOffset < batchBuffer.byteLength) {
           if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') return;
 
-          // Flow control – wait only when the channel is really full
           if (rawDataChannel.bufferedAmount > BUFFER_CEILING) {
             await new Promise(resolve => {
               let resolved = false;
@@ -1034,14 +1027,12 @@
               if (rawDataChannel) {
                 rawDataChannel.onbufferedamountlow = onDrain;
               }
-              // One-frame safety net (keeps speed almost identical)
-              setTimeout(onDrain, 16);
+              setTimeout(onDrain, 12);
             });
           }
 
           if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') return;
 
-          // Zero-delay RAM slice
           const sendEnd = Math.min(batchSubOffset + CHUNK_SIZE, batchBuffer.byteLength);
           const chunk = batchBuffer.slice(batchSubOffset, sendEnd);
 
@@ -1054,24 +1045,26 @@
           batchSubOffset += chunk.byteLength;
           fileOffset += chunk.byteLength;
 
-          // Rolling speed tracking
-          const speedBps = calculateRollingSpeed(fileOffset);
-          if (speedBps > 0) {
-            targetSpeedBps = speedBps;
-            const remainingBytes = Math.max(0, file.size - fileOffset);
-            const remainingSecs = Math.round(remainingBytes / speedBps);
-            targetEtaText = remainingSecs > 0 ? `ETA: ${remainingSecs}s` : 'Done';
-          }
-          targetPercent = Math.min(99.9, (fileOffset / file.size) * 100);
-
-          // ★ Critical anti-freeze yield – every ~1.5 MB
-          // This is what stops the UI freeze while keeping almost the same peak speed
-          if (fileOffset % (1.5 * 1024 * 1024) < CHUNK_SIZE) {
+          // Strong anti-freeze yield every ~480 KB
+          if (fileOffset - lastYield >= 480 * 1024) {
+            lastYield = fileOffset;
             await yieldToBrowser();
+          }
+
+          // Update UI numbers only every ~600 KB
+          if (fileOffset - lastUiUpdate >= 600 * 1024 || fileOffset >= file.size) {
+            lastUiUpdate = fileOffset;
+            const speedBps = calculateRollingSpeed(fileOffset);
+            if (speedBps > 0) {
+              targetSpeedBps = speedBps;
+              const remainingBytes = Math.max(0, file.size - fileOffset);
+              const remainingSecs = Math.round(remainingBytes / speedBps);
+              targetEtaText = remainingSecs > 0 ? `ETA: ${remainingSecs}s` : 'Done';
+            }
+            targetPercent = Math.min(99.9, (fileOffset / file.size) * 100);
           }
         }
 
-        // Extra light yield after every full 4 MB batch
         await yieldToBrowser();
       }
 
