@@ -539,7 +539,6 @@
 
   <script>
     const PEER_CONFIG = {
-      debug: 1,
       config: {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
@@ -547,15 +546,14 @@
           { urls: 'stun:stun2.l.google.com:19302' },
           { urls: 'stun:stun3.l.google.com:19302' },
           { urls: 'stun:stun4.l.google.com:19302' },
-          { urls: 'stun:stun.services.mozilla.com' }
+          { urls: 'stun:global.stun.twilio.com:3478' }
         ]
       }
     };
 
-    // Tuned chunk size and buffer limits for optimal throughput and zero memory lockups
-    const CHUNK_SIZE = 64000;            // 62.5 KB safe SCTP size
-    const HIGH_WATER_MARK = 2 * 1024 * 1024; // 2 MB pipeline buffer
-    const LOW_WATER_MARK = 512 * 1024;       // 512 KB resume threshold
+    const CHUNK_SIZE = 64 * 1024;        // 64 KB per chunk
+    const HIGH_WATER_MARK = 1024 * 1024; // 1 MB queue capacity
+    const LOW_WATER_MARK = 256 * 1024;   // 256 KB resume threshold
 
     let peer = null;
     let conn = null;
@@ -563,6 +561,7 @@
     let isSender = false;
     let wakeLock = null;
     let sessionCode = null;
+    let heartbeatInterval = null;
 
     let fileQueue = [];
     let currentFileIndex = 0;
@@ -611,6 +610,18 @@
         transferEta: document.getElementById('transfer-eta'),
         hiddenFileInput: document.getElementById('hidden-file-input')
       };
+    }
+
+    // Keep active WebSocket connection to PeerJS signaling server
+    function startHeartbeat(targetPeer) {
+      clearInterval(heartbeatInterval);
+      heartbeatInterval = setInterval(() => {
+        if (targetPeer && !targetPeer.destroyed && targetPeer.socket && targetPeer.socket._socket) {
+          if (targetPeer.socket._socket.readyState === 1) {
+            targetPeer.socket._socket.send(JSON.stringify({ type: 'HEARTBEAT' }));
+          }
+        }
+      }, 15000);
     }
 
     // High precision rolling speed meter with exponential smoothing
@@ -724,7 +735,7 @@
       clearTimeout(showToast._timer);
       showToast._timer = setTimeout(() => {
         if (els.toast) els.toast.classList.remove('show');
-      }, 2600);
+      }, 2800);
     }
 
     function generateSixDigitCode() {
@@ -751,6 +762,7 @@
     function cancelAndReset() {
       isCancelled = true;
       releaseWakeLock();
+      clearInterval(heartbeatInterval);
 
       if (fileAckResolver) {
         fileAckResolver();
@@ -758,7 +770,7 @@
       }
 
       if (conn && conn.open) {
-        try { conn.send(JSON.stringify({ type: 'TRANSFER_CANCEL' })); } catch (_) {}
+        try { conn.send({ type: 'TRANSFER_CANCEL' }); } catch (_) {}
       }
       if (conn) {
         try { conn.close(); } catch (_) {}
@@ -781,12 +793,7 @@
 
       if (els.hiddenFileInput) els.hiddenFileInput.value = '';
 
-      const btn = els.btnConnect || document.getElementById('btn-connect');
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = 'Connect & Receive';
-      }
-
+      resetReceiverButton();
       showView('view-home');
     }
 
@@ -807,7 +814,7 @@
       isSender = false;
       showView('view-receive');
       setupOtpInputs();
-      if (!peer || peer.destroyed) initReceiverPeer();
+      ensureReceiverPeer().catch(() => {});
     }
 
     function copyShareLink() {
@@ -859,7 +866,10 @@
             if (inputs[i]) inputs[i].value = digit;
           });
           checkOtpFilled();
-          if (pasted.length === 6) inputs[5].focus();
+          if (pasted.length === 6) {
+            inputs[5].focus();
+            connectWithCode(pasted);
+          }
         };
       });
       setTimeout(() => inputs[0] && inputs[0].focus(), 150);
@@ -972,6 +982,7 @@
       fileQueue = files;
       currentBatchTotal = files.length;
       currentFileIndex = 0;
+      conn = null;
 
       const code = generateSixDigitCode();
       const peerId = 'sendly-' + code;
@@ -993,6 +1004,7 @@
       });
 
       peer.on('open', () => {
+        startHeartbeat(peer);
         if (els.displayCode) els.displayCode.textContent = code;
         renderSendQueuePreview();
         showView('view-send');
@@ -1012,25 +1024,30 @@
         }
       });
 
+      peer.on('disconnected', () => {
+        if (!isCancelled && peer && !peer.destroyed) {
+          peer.reconnect();
+        }
+      });
+
       peer.on('connection', (c) => {
-        if (conn && conn !== c) {
+        if (conn && conn.open && conn !== c) {
           try { c.close(); } catch (_) {}
           return;
         }
         conn = c;
-        // Enforce raw binary mode for zero serialization lag
-        conn.serialization = 'none';
         bindSenderEvents(conn);
       });
     }
 
     function bindSenderEvents(c) {
       c.on('data', (data) => {
-        if (typeof data !== 'string') return;
-        let msg;
-        try { msg = JSON.parse(data); } catch (_) { return; }
+        let msg = data;
+        if (typeof data === 'string') {
+          try { msg = JSON.parse(data); } catch (_) { return; }
+        }
+        if (!msg || typeof msg !== 'object') return;
 
-        // Perfect lockstep telemetry from receiver
         if (msg.type === 'SYNC') {
           uiState.transferred = msg.b;
           uiState.speedText = msg.s;
@@ -1065,7 +1082,8 @@
         }
       });
 
-      c.on('error', () => {
+      c.on('error', (err) => {
+        console.error('Sender channel error:', err);
         if (!isCancelled) {
           showToast('Transfer interrupted.');
           cancelAndReset();
@@ -1082,7 +1100,7 @@
 
       if (currentFileIndex === 0) {
         try {
-          conn.send(JSON.stringify({ type: 'BATCH_META', count: currentBatchTotal }));
+          conn.send({ type: 'BATCH_META', count: currentBatchTotal });
         } catch (_) {}
       }
 
@@ -1147,26 +1165,25 @@
             dc.addEventListener('bufferedamountlow', onLow, { once: true });
           }
 
-          // Safety polling check to prevent freezes if event was dropped
           timer = setInterval(() => {
             if (!dc || dc.bufferedAmount <= LOW_WATER_MARK || isCancelled || !conn || !conn.open) {
               onLow();
             }
-          }, 15);
+          }, 20);
         });
       }
 
-      // Step 1: Send Header
-      conn.send(JSON.stringify({
+      // Step 1: Send File Header
+      conn.send({
         type: 'FILE_START',
         name: file.name,
         size: file.size,
         mime: file.type || 'application/octet-stream'
-      }));
+      });
 
       let offset = 0;
 
-      // Step 2: High speed streaming with backpressure
+      // Step 2: Continuous chunk streaming
       while (offset < file.size) {
         if (isCancelled || !conn || !conn.open) break;
 
@@ -1185,45 +1202,84 @@
         offset = end;
       }
 
-      // Step 3: Wait for socket buffer drain with timeout guard
+      // Step 3: Wait for local buffer to clear
       const drainStart = performance.now();
       while (dc && dc.bufferedAmount > 0 && !isCancelled && conn && conn.open) {
         if (performance.now() - drainStart > 8000) break;
-        await new Promise((r) => setTimeout(r, 15));
+        await new Promise((r) => setTimeout(r, 20));
       }
 
       if (isCancelled || !conn || !conn.open) return;
 
-      // Step 4: Send completion header and wait for receiver confirmation
-      conn.send(JSON.stringify({ type: 'FILE_END' }));
+      // Step 4: Send completion signal and wait for receiver confirmation
+      conn.send({ type: 'FILE_END' });
 
       await new Promise((resolve) => {
         fileAckResolver = resolve;
-        setTimeout(resolve, 10000); // 10s fallback guard
+        setTimeout(resolve, 8000);
       });
     }
 
     // RECEIVER PIPELINE
-    function initReceiverPeer() {
-      if (peer && !peer.destroyed) return;
-      peer = new Peer(PEER_CONFIG);
-
-      peer.on('error', (err) => {
-        console.error('Receiver peer error:', err);
-        const msg = err.type === 'peer-unavailable'
-          ? 'Device not found. Check code and try again.'
-          : 'Connection notice: ' + (err.type || 'check internet');
-        showToast(msg);
-        resetReceiverButton();
-      });
-    }
-
     function resetReceiverButton() {
       const btn = els.btnConnect || document.getElementById('btn-connect');
       if (btn) {
         btn.disabled = false;
         btn.textContent = 'Connect & Receive';
       }
+    }
+
+    // Guarantees an active, connected Peer instance before dialing
+    function ensureReceiverPeer() {
+      return new Promise((resolve, reject) => {
+        if (peer && !peer.destroyed && !peer.disconnected && peer.open) {
+          return resolve(peer);
+        }
+
+        if (peer && !peer.destroyed && peer.disconnected) {
+          peer.once('open', () => {
+            startHeartbeat(peer);
+            resolve(peer);
+          });
+          peer.reconnect();
+          return;
+        }
+
+        if (peer) {
+          try { peer.destroy(); } catch (_) {}
+          peer = null;
+        }
+
+        peer = new Peer(PEER_CONFIG);
+
+        const timeout = setTimeout(() => {
+          reject(new Error('Signaling server timeout'));
+        }, 8000);
+
+        peer.once('open', () => {
+          clearTimeout(timeout);
+          startHeartbeat(peer);
+          resolve(peer);
+        });
+
+        peer.on('disconnected', () => {
+          if (!isCancelled && peer && !peer.destroyed) {
+            peer.reconnect();
+          }
+        });
+
+        peer.on('error', (err) => {
+          clearTimeout(timeout);
+          console.error('Receiver peer error:', err);
+          if (err.type === 'peer-unavailable') {
+            showToast('Code not found. Check sender device.');
+          } else {
+            showToast('Network notice: ' + (err.type || 'connection interrupted'));
+          }
+          resetReceiverButton();
+          reject(err);
+        });
+      });
     }
 
     async function connectWithCode(customCode = null) {
@@ -1239,134 +1295,70 @@
       isSender = false;
       sessionCode = targetCode;
 
-      const targetPeerId = 'sendly-' + targetCode;
       const btn = els.btnConnect || document.getElementById('btn-connect');
       if (btn) {
         btn.disabled = true;
         btn.textContent = 'Connecting...';
       }
 
-      if (!peer || peer.destroyed) {
-        initReceiverPeer();
-      }
+      showToast('Connecting to sender...');
 
-      const startConnection = () => {
-        try {
-          conn = peer.connect(targetPeerId, {
-            reliable: true,
-            serialization: 'none' // Raw binary mode
-          });
-          bindReceiverEvents(conn);
-        } catch (err) {
-          console.error('Connect failed:', err);
-          showToast('Connection failed. Please retry.');
+      try {
+        const activePeer = await ensureReceiverPeer();
+        const targetPeerId = 'sendly-' + targetCode;
+
+        conn = activePeer.connect(targetPeerId, { reliable: true });
+
+        if (!conn) {
+          showToast('Could not initiate connection. Try again.');
           resetReceiverButton();
+          return;
         }
-      };
 
-      if (peer && peer.open) {
-        startConnection();
-      } else if (peer) {
-        peer.once('open', startConnection);
-        peer.once('error', resetReceiverButton);
+        let connectionTimer = setTimeout(() => {
+          if (conn && !conn.open) {
+            try { conn.close(); } catch (_) {}
+            showToast('Connection timed out. Check code or sender.');
+            resetReceiverButton();
+          }
+        }, 12000);
+
+        conn.on('open', () => {
+          clearTimeout(connectionTimer);
+        });
+
+        bindReceiverEvents(conn);
+      } catch (err) {
+        console.error('Connect failed:', err);
+        showToast('Connection failed. Please check internet and retry.');
+        resetReceiverButton();
       }
     }
 
     function bindReceiverEvents(c) {
-      c.on('open', () => {
-        if (isCancelled) return;
-      });
-
       c.on('data', (data) => {
         if (isCancelled) return;
 
-        // Message Header Handler
-        if (typeof data === 'string') {
-          let msg;
-          try { msg = JSON.parse(data); } catch (_) { return; }
-
-          if (msg.type === 'BATCH_META') {
-            receiverBatchCount = msg.count || 1;
-            receiverBatchIndex = 0;
-            return;
-          }
-
-          if (msg.type === 'FILE_START') {
-            receiverBatchIndex++;
-            receiverMeta = {
-              name: (msg.name || 'file').replace(/[/\\:*?"<>|]/g, '_').slice(0, 255),
-              size: msg.size || 0,
-              mime: msg.mime || 'application/octet-stream'
-            };
-            receiverChunks = [];
-            receiverBytes = 0;
-            lastSyncSendTime = 0;
-            resetSpeedMeter();
-
-            initTransferView(
-              'RECEIVING FILE',
-              'Receiving file...',
-              receiverMeta.name,
-              receiverMeta.size,
-              receiverBatchIndex,
-              receiverBatchCount
-            );
-            return;
-          }
-
-          if (msg.type === 'FILE_END' && receiverMeta) {
-            uiState.isComplete = true;
-            uiState.transferred = receiverMeta.size;
-            uiState.status = 'Delivered';
-            scheduleUiUpdate();
-
-            // Send final 100% sync tick and file complete ACK
-            try {
-              c.send(JSON.stringify({
-                type: 'SYNC',
-                b: receiverMeta.size,
-                s: 'Completed',
-                eta: ''
-              }));
-              c.send(JSON.stringify({ type: 'FILE_ACK' }));
-            } catch (_) {}
-
-            // Save file directly to device
-            const blob = new Blob(receiverChunks, { type: receiverMeta.mime });
-            receiverChunks = []; // Clean memory immediately
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = receiverMeta.name;
-            a.style.display = 'none';
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            setTimeout(() => URL.revokeObjectURL(url), 15000);
-
-            const isBatchFinished = receiverBatchIndex >= receiverBatchCount;
-            receiverMeta = null;
-
-            if (isBatchFinished) {
-              showBatchComplete(receiverBatchCount, false);
-            }
-            return;
-          }
-
-          if (msg.type === 'TRANSFER_CANCEL') {
-            showToast('Sender cancelled transfer.');
-            cancelAndReset();
-          }
+        // Structured Header Handling
+        if (data && typeof data === 'object' && !(data instanceof ArrayBuffer) && !(data instanceof Uint8Array)) {
+          handleReceiverControlMessage(data, c);
           return;
         }
 
-        // Fast Raw Binary Chunk Ingestion
+        if (typeof data === 'string') {
+          let msg;
+          try { msg = JSON.parse(data); } catch (_) { return; }
+          handleReceiverControlMessage(msg, c);
+          return;
+        }
+
+        // Binary Chunk Ingestion
         if (receiverMeta) {
           receiverChunks.push(data);
-          receiverBytes += data.byteLength;
+          const chunkLen = data.byteLength || data.size || 0;
+          receiverBytes += chunkLen;
 
           const now = performance.now();
-          // Throttle telemetry sync to sender (every 90ms or upon final chunk)
           if (now - lastSyncSendTime >= 90 || receiverBytes === receiverMeta.size) {
             lastSyncSendTime = now;
             const spd = calculateSpeed(receiverBytes);
@@ -1376,27 +1368,25 @@
             const remainingSecs = spd > 0 ? remainingBytes / spd : null;
             const etaStr = formatEtaString(remainingSecs);
 
-            // Update local receiver UI state
             uiState.transferred = receiverBytes;
             uiState.speedText = spdStr;
             uiState.etaText = etaStr;
             scheduleUiUpdate();
 
-            // Transmit matching stats to sender
             try {
-              c.send(JSON.stringify({
+              c.send({
                 type: 'SYNC',
                 b: receiverBytes,
                 s: spdStr,
                 eta: etaStr
-              }));
+              });
             } catch (_) {}
           }
         }
       });
 
       c.on('error', (err) => {
-        console.error('Connection error:', err);
+        console.error('Receiver connection error:', err);
         showToast('Connection issue encountered.');
         resetReceiverButton();
       });
@@ -1407,6 +1397,80 @@
           cancelAndReset();
         }
       });
+    }
+
+    function handleReceiverControlMessage(msg, c) {
+      if (msg.type === 'BATCH_META') {
+        receiverBatchCount = msg.count || 1;
+        receiverBatchIndex = 0;
+        return;
+      }
+
+      if (msg.type === 'FILE_START') {
+        receiverBatchIndex++;
+        receiverMeta = {
+          name: (msg.name || 'file').replace(/[/\\:*?"<>|]/g, '_').slice(0, 255),
+          size: msg.size || 0,
+          mime: msg.mime || 'application/octet-stream'
+        };
+        receiverChunks = [];
+        receiverBytes = 0;
+        lastSyncSendTime = 0;
+        resetSpeedMeter();
+
+        initTransferView(
+          'RECEIVING FILE',
+          'Receiving file...',
+          receiverMeta.name,
+          receiverMeta.size,
+          receiverBatchIndex,
+          receiverBatchCount
+        );
+        return;
+      }
+
+      if (msg.type === 'FILE_END' && receiverMeta) {
+        uiState.isComplete = true;
+        uiState.transferred = receiverMeta.size;
+        uiState.status = 'Delivered';
+        scheduleUiUpdate();
+
+        try {
+          c.send({
+            type: 'SYNC',
+            b: receiverMeta.size,
+            s: 'Completed',
+            eta: ''
+          });
+          c.send({ type: 'FILE_ACK' });
+        } catch (_) {}
+
+        // Download directly to device
+        const blob = new Blob(receiverChunks, { type: receiverMeta.mime });
+        receiverChunks = [];
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = receiverMeta.name;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 15000);
+
+        const isBatchFinished = receiverBatchIndex >= receiverBatchCount;
+        receiverMeta = null;
+
+        if (isBatchFinished) {
+          showBatchComplete(receiverBatchCount, false);
+        }
+        return;
+      }
+
+      if (msg.type === 'TRANSFER_CANCEL') {
+        showToast('Sender cancelled transfer.');
+        cancelAndReset();
+      }
     }
 
     // Direct link autoconnect (?code=123456)
@@ -1422,13 +1486,13 @@
           if (inputs[idx]) inputs[idx].value = d;
         });
         checkOtpFilled();
-        setTimeout(() => connectWithCode(autoCode), 150);
+        setTimeout(() => connectWithCode(autoCode), 350);
       }
     });
 
     window.addEventListener('beforeunload', () => {
       if (conn && conn.open) {
-        try { conn.send(JSON.stringify({ type: 'TRANSFER_CANCEL' })); } catch (_) {}
+        try { conn.send({ type: 'TRANSFER_CANCEL' }); } catch (_) {}
       }
     });
   </script>
