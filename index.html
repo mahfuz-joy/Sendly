@@ -428,7 +428,7 @@
       width: 0%;
       height: 100%;
       background: linear-gradient(90deg, #5b68f6, #10b981);
-      transition: width 0.12s linear;
+      transition: width 0.22s ease-out;
     }
 
     .progress-info {
@@ -667,10 +667,10 @@
     let isSender = false;
     let handshakeTimer = null;
 
-    // High performance and zero-freeze streaming limits
-    const CHUNK_SIZE = 64 * 1024; // 64 KB (Standard SCTP safe payload)
-    const BUFFER_CEILING = 1.5 * 1024 * 1024; // 1.5 MB high watermark
-    const BUFFER_FLOOR = 384 * 1024; // 384 KB low watermark (instant resumption)
+    // High performance and zero micro-stutter streaming limits
+    const CHUNK_SIZE = 128 * 1024; // 128 KB (Halves disk slicing and garbage collection pauses)
+    const BUFFER_CEILING = 2 * 1024 * 1024; // 2 MB high watermark
+    const BUFFER_FLOOR = 512 * 1024; // 512 KB low watermark (instant seamless resumption)
 
     function showToast(message) {
       const toast = document.getElementById('toast');
