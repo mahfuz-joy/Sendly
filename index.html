@@ -652,10 +652,10 @@
     let isSender = false;
 
     // Constants for Extreme Speed + Zero Freeze Architecture
-    const CHUNK_SIZE = 128 * 1024;           // 128 KB (Sweet spot for WebRTC packets)
+    const CHUNK_SIZE = 64 * 1024;            // 64 KB (Maximum safety for strict SCTP limits)
     const BATCH_SIZE = 4 * 1024 * 1024;      // 4 MB RAM read block
-    const BUFFER_CEILING = 2 * 1024 * 1024;  // 2 MB wait threshold (prevents congestion)
-    const BUFFER_FLOOR = 256 * 1024;         // 256 KB resume threshold
+    const BUFFER_CEILING = 2 * 1024 * 1024;  // 2 MB wait threshold
+    const BUFFER_FLOOR = 512 * 1024;         // 512 KB resume threshold
 
     // Global Transfer Trackers (Math offloaded from main thread)
     let currentBytesTransferred = 0;
@@ -1005,6 +1005,11 @@
           currentBytesTransferred += data.byteLength;
           targetStatusText = 'Receiving...';
 
+          // NEW: Send sync-ack every ~512KB to keep sender's UI perfectly synced
+          if (receivedChunks.length % 8 === 0 || currentBytesTransferred >= meta.size) {
+             try { rawDataChannel.send(JSON.stringify({ type: 'sync-ack', bytes: currentBytesTransferred })); } catch (e) {}
+          }
+
           if (currentBytesTransferred >= meta.size) {
             targetStatusText = 'Saving to device...';
 
@@ -1061,6 +1066,9 @@
                 isTransferring = true;
                 pumpStreamMaximumThroughput(file);
               }
+            } else if (msg.type === 'sync-ack') {
+              // NEW: Sender UI is now driven by the receiver's reality!
+              currentBytesTransferred = msg.bytes;
             } else if (msg.type === 'file-done') {
               showTransferComplete();
             } else if (msg.type === 'control-cancel') {
@@ -1095,13 +1103,18 @@
         while (batchSubOffset < batchBuffer.byteLength) {
           if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') return;
 
-          // Backpressure wait (No Timers used!)
+          // Backpressure wait with Timeout Failsafe (Prevents Deadlocks)
           if (rawDataChannel.bufferedAmount >= BUFFER_CEILING) {
             await new Promise((resolve) => {
-              rawDataChannel.onbufferedamountlow = () => {
+              let isResolved = false;
+              const proceed = () => {
+                if (isResolved) return;
+                isResolved = true;
                 rawDataChannel.onbufferedamountlow = null;
                 resolve();
               };
+              rawDataChannel.onbufferedamountlow = proceed;
+              setTimeout(proceed, 20); // Failsafe: if browser misses event, force check
             });
           }
 
@@ -1112,9 +1125,10 @@
           rawDataChannel.send(chunk);
 
           batchSubOffset += chunk.byteLength;
-          fileOffset += chunk.byteLength;
-          currentBytesTransferred = fileOffset; // Update variable natively for RAF loop
+          // fileOffset update removed from here so UI syncs with Receiver, not Buffer!
         }
+        
+        fileOffset += batchBuffer.byteLength;
 
         // *** THE MAGIC YIELD (Zero-Delay Thread Yielding) ***
         // This tiny 0-millisecond pause allows the browser to clear its network queue,
