@@ -668,9 +668,6 @@
     let selectedFile = null;
     let isCancelled = false;
     let isSender = false;
-    let extraChannels = [];
-    let receiverStarted = false;
-    const NUM_EXTRA_CHANNELS = 3; // total channels used = 1 (main) + 3 = 4
 
     const CHUNK_SIZE = 256 * 1024;
     const BATCH_SIZE = 4 * 1024 * 1024;
@@ -716,11 +713,6 @@
           rawDataChannel.close();
         } catch (e) {}
       }
-      extraChannels.forEach((ch) => {
-        try { ch.close(); } catch (e) {}
-      });
-      extraChannels = [];
-      receiverStarted = false;
       if (activeConnection) {
         try { activeConnection.close(); } catch (e) {}
         activeConnection = null;
@@ -788,29 +780,7 @@
         activeConnection.on('open', () => {
           rawDataChannel = activeConnection.dataChannel;
           rawDataChannel.binaryType = 'arraybuffer';
-
-          const rtcConn = activeConnection.peerConnection;
-          extraChannels = [];
-          let openCount = 0;
-          const totalExtra = NUM_EXTRA_CHANNELS;
-
-          const startWhenReady = () => {
-            openCount++;
-            if (openCount === totalExtra) {
-              setupRawSenderChannel(selectedFile);
-            }
-          };
-
-          if (rtcConn && totalExtra > 0) {
-            for (let i = 0; i < totalExtra; i++) {
-              const ch = rtcConn.createDataChannel('sendly-extra-' + i);
-              ch.binaryType = 'arraybuffer';
-              ch.onopen = startWhenReady;
-              extraChannels.push(ch);
-            }
-          } else {
-            setupRawSenderChannel(selectedFile);
-          }
+          setupRawSenderChannel(selectedFile);
         });
 
         activeConnection.on('error', (err) => {
@@ -895,33 +865,11 @@
 
     function makeReceiverCall(targetPeerId) {
       activeConnection = peer.connect(targetPeerId, { reliable: true });
-      extraChannels = [];
-      let extraOpenCount = 0;
 
       activeConnection.on('open', () => {
         rawDataChannel = activeConnection.dataChannel;
         rawDataChannel.binaryType = 'arraybuffer';
-
-        const rtcConn = activeConnection.peerConnection;
-        if (rtcConn && NUM_EXTRA_CHANNELS > 0) {
-          rtcConn.ondatachannel = (evt) => {
-            const ch = evt.channel;
-            ch.binaryType = 'arraybuffer';
-            extraChannels.push(ch);
-            ch.onopen = () => {
-              extraOpenCount++;
-              if (extraOpenCount === NUM_EXTRA_CHANNELS) {
-                setupRawReceiverChannel();
-              }
-            };
-          };
-          // Fallback: if extra channels never arrive (older peer / relay quirk), start after a short wait
-          setTimeout(() => {
-            if (!receiverStarted) setupRawReceiverChannel();
-          }, 3000);
-        } else {
-          setupRawReceiverChannel();
-        }
+        setupRawReceiverChannel();
       });
 
       activeConnection.on('error', (err) => {
@@ -956,16 +904,14 @@
     }
 
     function setupRawReceiverChannel() {
-      receiverStarted = true;
+      let receivedChunks = [];
       let meta = null;
       let receivedBytes = 0;
-      let fileBuffer = null;
-      const allChannels = [rawDataChannel, ...extraChannels];
 
       speedTracker.lastTime = performance.now();
       speedTracker.lastBytes = 0;
 
-      function handleMessage(event) {
+      rawDataChannel.onmessage = (event) => {
         if (isCancelled) return;
         const data = event.data;
 
@@ -974,8 +920,8 @@
             const msg = JSON.parse(data);
             if (msg.type === 'file-meta') {
               meta = msg;
+              receivedChunks = [];
               receivedBytes = 0;
-              fileBuffer = new Uint8Array(meta.size);
               speedTracker.lastTime = performance.now();
               speedTracker.lastBytes = 0;
 
@@ -988,14 +934,9 @@
           return;
         }
 
-        if (data instanceof ArrayBuffer && meta && fileBuffer) {
-          // First 8 bytes = offset (as a 64-bit unsigned int, but we only need up to ~4GB safely as two 32-bit parts)
-          const headerView = new DataView(data, 0, 8);
-          const offset = headerView.getUint32(0) * 0x100000000 + headerView.getUint32(4);
-          const payload = new Uint8Array(data, 8);
-
-          fileBuffer.set(payload, offset);
-          receivedBytes += payload.byteLength;
+        if (data instanceof ArrayBuffer && meta) {
+          receivedChunks.push(data);
+          receivedBytes += data.byteLength;
 
           const now = performance.now();
           if (now - speedTracker.lastTime > 200) {
@@ -1021,7 +962,7 @@
               rawDataChannel.send(JSON.stringify({ type: 'file-done' }));
             } catch (e) {}
 
-            const blob = new Blob([fileBuffer], { type: meta.fileType || 'application/octet-stream' });
+            const blob = new Blob(receivedChunks, { type: meta.fileType || 'application/octet-stream' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.style.display = 'none';
@@ -1035,14 +976,9 @@
             }, 2000);
 
             showTransferComplete(false);
-            fileBuffer = null;
           }
         }
-      }
-
-      allChannels.forEach((ch) => {
-        ch.onmessage = handleMessage;
-      });
+      };
     }
 
     async function setupRawSenderChannel(file) {
@@ -1054,8 +990,6 @@
         size: file.size,
         fileType: file.type
       }));
-
-      const allChannels = [rawDataChannel, ...extraChannels];
 
       rawDataChannel.onmessage = (event) => {
         if (typeof event.data === 'string') {
@@ -1074,29 +1008,13 @@
         }
       };
 
-      allChannels.forEach((ch) => {
-        ch.bufferedAmountLowThreshold = 4 * 1024 * 1024;
-      });
+      rawDataChannel.bufferedAmountLowThreshold = 4 * 1024 * 1024;
 
-      let sentBytes = 0;
+      let fileOffset = 0;
       speedTracker.lastTime = performance.now();
       speedTracker.lastBytes = 0;
 
-      // Helper: write an 8-byte big-endian offset header followed by the payload
-      function makeTaggedChunk(offset, payloadBuffer) {
-        const out = new Uint8Array(8 + payloadBuffer.byteLength);
-        const view = new DataView(out.buffer, 0, 8);
-        // offset fits well within Number.MAX_SAFE_INTEGER for any realistic file size
-        view.setUint32(0, Math.floor(offset / 0x100000000));
-        view.setUint32(4, offset % 0x100000000);
-        out.set(new Uint8Array(payloadBuffer), 8);
-        return out.buffer;
-      }
-
-      async function pumpChannel(channel, startOffset) {
-        let fileOffset = startOffset;
-        const stride = allChannels.length * BATCH_SIZE;
-
+      async function pumpBatchedStream() {
         while (fileOffset < file.size) {
           if (isCancelled) return;
 
@@ -1108,47 +1026,37 @@
           while (batchSubOffset < batchBuffer.byteLength) {
             if (isCancelled) return;
 
-            if (channel.bufferedAmount > channel.bufferedAmountLowThreshold) {
+            if (rawDataChannel.bufferedAmount > rawDataChannel.bufferedAmountLowThreshold) {
               await new Promise((resolve) => {
-                channel.onbufferedamountlow = () => {
-                  channel.onbufferedamountlow = null;
+                rawDataChannel.onbufferedamountlow = () => {
+                  rawDataChannel.onbufferedamountlow = null;
                   resolve();
                 };
               });
             }
 
-            if (channel.readyState !== 'open') return;
+            if (rawDataChannel.readyState !== 'open') return;
 
             const sendEnd = Math.min(batchSubOffset + CHUNK_SIZE, batchBuffer.byteLength);
-            const rawChunk = batchBuffer.slice(batchSubOffset, sendEnd);
-            const taggedChunk = makeTaggedChunk(fileOffset + batchSubOffset, rawChunk);
-            channel.send(taggedChunk);
+            const chunk = batchBuffer.slice(batchSubOffset, sendEnd);
+            rawDataChannel.send(chunk);
 
-            const chunkLen = rawChunk.byteLength;
-            batchSubOffset += chunkLen;
+            batchSubOffset += chunk.byteLength;
+            fileOffset += chunk.byteLength;
 
-            sentBytes += chunkLen;
             const now = performance.now();
             if (now - speedTracker.lastTime > 200) {
-              updateSpeedMetrics(sentBytes, file.size, now);
+              updateSpeedMetrics(fileOffset, file.size, now);
               speedTracker.lastTime = now;
-              speedTracker.lastBytes = sentBytes;
+              speedTracker.lastBytes = fileOffset;
             }
           }
-
-          fileOffset += stride;
         }
+
+        updateProgressHUD(99, 'Verifying with receiver...');
       }
 
-      async function pumpAllChannels() {
-        const tasks = allChannels.map((ch, idx) => pumpChannel(ch, idx * BATCH_SIZE));
-        await Promise.all(tasks);
-        if (!isCancelled) {
-          updateProgressHUD(99, 'Verifying with receiver...');
-        }
-      }
-
-      pumpAllChannels();
+      pumpBatchedStream();
     }
 
     function updateSpeedMetrics(currentBytes, totalBytes, now) {
