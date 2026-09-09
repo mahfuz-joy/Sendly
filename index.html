@@ -1005,11 +1005,6 @@
           currentBytesTransferred += data.byteLength;
           targetStatusText = 'Receiving...';
 
-          // NEW: Send sync-ack every ~512KB to keep sender's UI perfectly synced
-          if (receivedChunks.length % 8 === 0 || currentBytesTransferred >= meta.size) {
-             try { rawDataChannel.send(JSON.stringify({ type: 'sync-ack', bytes: currentBytesTransferred })); } catch (e) {}
-          }
-
           if (currentBytesTransferred >= meta.size) {
             targetStatusText = 'Saving to device...';
 
@@ -1066,9 +1061,6 @@
                 isTransferring = true;
                 pumpStreamMaximumThroughput(file);
               }
-            } else if (msg.type === 'sync-ack') {
-              // NEW: Sender UI is now driven by the receiver's reality!
-              currentBytesTransferred = msg.bytes;
             } else if (msg.type === 'file-done') {
               showTransferComplete();
             } else if (msg.type === 'control-cancel') {
@@ -1085,8 +1077,12 @@
       totalBytesToTransfer = file.size;
       targetStatusText = 'Sending file...';
 
+      // STRICT BACKPRESSURE LIMITS - Solves the 5 KB/s Network Collapse Issue
+      const SAFE_CHUNK = 64 * 1024;     // 64 KB chunks (Safest for WebRTC)
+      const MAX_BUFFER = 1024 * 1024;   // 1 MB max buffer (Prevents SCTP choking)
+
       if (rawDataChannel) {
-        rawDataChannel.bufferedAmountLowThreshold = BUFFER_FLOOR;
+        rawDataChannel.bufferedAmountLowThreshold = MAX_BUFFER / 2; // 512 KB
       }
 
       let fileOffset = 0;
@@ -1094,46 +1090,26 @@
       while (fileOffset < file.size) {
         if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') return;
 
-        // Read batch into RAM cleanly
-        const batchEnd = Math.min(fileOffset + BATCH_SIZE, file.size);
-        const batchSlice = file.slice(fileOffset, batchEnd);
-        const batchBuffer = await batchSlice.arrayBuffer();
-
-        let batchSubOffset = 0;
-        while (batchSubOffset < batchBuffer.byteLength) {
-          if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') return;
-
-          // Backpressure wait with Timeout Failsafe (Prevents Deadlocks)
-          if (rawDataChannel.bufferedAmount >= BUFFER_CEILING) {
-            await new Promise((resolve) => {
-              let isResolved = false;
-              const proceed = () => {
-                if (isResolved) return;
-                isResolved = true;
-                rawDataChannel.onbufferedamountlow = null;
-                resolve();
-              };
-              rawDataChannel.onbufferedamountlow = proceed;
-              setTimeout(proceed, 20); // Failsafe: if browser misses event, force check
-            });
-          }
-
-          if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') return;
-
-          const sendEnd = Math.min(batchSubOffset + CHUNK_SIZE, batchBuffer.byteLength);
-          const chunk = batchBuffer.slice(batchSubOffset, sendEnd);
-          rawDataChannel.send(chunk);
-
-          batchSubOffset += chunk.byteLength;
-          // fileOffset update removed from here so UI syncs with Receiver, not Buffer!
+        // Strict backpressure wait WITHOUT timeouts. Timeouts cause the 5 KB/s crash!
+        if (rawDataChannel.bufferedAmount >= MAX_BUFFER) {
+          await new Promise((resolve) => {
+            rawDataChannel.onbufferedamountlow = () => {
+              rawDataChannel.onbufferedamountlow = null;
+              resolve();
+            };
+          });
         }
-        
-        fileOffset += batchBuffer.byteLength;
 
-        // *** THE MAGIC YIELD (Zero-Delay Thread Yielding) ***
-        // This tiny 0-millisecond pause allows the browser to clear its network queue,
-        // render the 60FPS UI smoothly, and prevents any micro-stuttering/freezing.
-        await new Promise(r => setTimeout(r, 0));
+        if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') return;
+
+        const sendEnd = Math.min(fileOffset + SAFE_CHUNK, file.size);
+        const chunkSlice = file.slice(fileOffset, sendEnd);
+        const chunkBuffer = await chunkSlice.arrayBuffer();
+
+        rawDataChannel.send(chunkBuffer);
+
+        fileOffset += chunkBuffer.byteLength;
+        currentBytesTransferred = fileOffset; // Update sender UI smoothly based on sent data
       }
 
       targetStatusText = 'Finalizing transfer...';
