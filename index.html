@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Sendly: High-Speed Direct P2P Transfer</title>
+  <title>Sendly: Ultra-Fast Direct P2P Transfer</title>
 
   <meta name="theme-color" content="#5b68f6">
   <meta name="mobile-web-app-capable" content="yes">
@@ -564,7 +564,7 @@
         </div>
       </div>
 
-      <!-- Completion Box -->
+      <!-- Completion -->
       <div id="completion-box" class="hidden">
         <div class="success-badge">
           <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
@@ -602,7 +602,7 @@
   </div>
 
   <script>
-    // Exact STUN configuration as your friend's app plus Google STUN fallback
+    // STUN configuration matching FileLenDen
     const PEER_CONFIG = {
       config: {
         iceServers: [
@@ -613,15 +613,12 @@
       }
     };
 
-    // Ideal packet parameters: 64 KB chunk, 512 KB low threshold, 1.5 MB high limit
-    const CHUNK_SIZE = 64 * 1024;
-    const BUFFER_THRESHOLD = CHUNK_SIZE * 8; // 512 KB
-    const BUFFER_HIGH = 1.5 * 1024 * 1024;   // 1.5 MB pipeline depth
-    const RECEIVER_PARTITION = 16 * 1024 * 1024; // 16 MB sub-blobs to keep mobile RAM low
+    const CHUNK_SIZE = 64 * 1024;      // 64 KB network packet
+    const BLOCK_SIZE = 1024 * 1024;    // 1 MB disk read-ahead block
+    const BUFFER_LIMIT = CHUNK_SIZE * 8; // 512 KB threshold
 
     let peer = null;
-    let activeConnection = null;
-    let rawDataChannel = null;
+    let conn = null;
     let isCancelled = false;
     let isSender = false;
     let wakeLock = null;
@@ -631,12 +628,9 @@
     let currentFileIndex = 0;
     let currentBatchTotal = 0;
 
-    let currentTransferredBytes = 0;
-    let currentFileSize = 0;
     let transferStartTime = 0;
-
-    let uiUpdateTimer = null;
-    let currentStatusText = 'Connecting...';
+    let targetStatusText = 'Connecting...';
+    let lastUiUpdate = 0;
 
     async function requestWakeLock() {
       try {
@@ -688,31 +682,26 @@
       if (pct) pct.innerText = Math.floor(p) + '%';
     }
 
-    // High performance UI updater: runs on a 100ms decoupled clock to avoid thread lag
-    function renderTick() {
-      let realDone = currentTransferredBytes;
-      if (isSender && rawDataChannel) {
-        const buffered = rawDataChannel.bufferedAmount || 0;
-        realDone = Math.max(0, currentTransferredBytes - buffered);
-      }
+    function updateProgress(transferred, total, force = false) {
+      const now = performance.now();
+      if (!force && now - lastUiUpdate < 60) return;
+      lastUiUpdate = now;
 
       const elapsed = (Date.now() - transferStartTime) / 1000;
-      const speed = elapsed > 0.1 ? realDone / elapsed : 0;
-      const remainingSecs = (speed > 0 && currentFileSize > 0)
-        ? Math.max(0, (currentFileSize - realDone) / speed)
-        : null;
+      const speed = elapsed > 0 ? transferred / elapsed : 0;
+      const remainingSecs = (speed > 0 && total > 0) ? (total - transferred) / speed : null;
 
-      const percent = currentFileSize > 0 ? (realDone / currentFileSize) * 100 : 0;
-      setProgressPercent(currentStatusText === 'Delivered' ? 100 : Math.min(99.9, percent));
+      const realPercent = total > 0 ? (transferred / total) * 100 : 0;
+      setProgressPercent(targetStatusText === 'Delivered' ? 100 : Math.min(99.9, realPercent));
 
       const statusEl = document.getElementById('transfer-status');
       const speedEl = document.getElementById('transfer-speed');
       const etaEl = document.getElementById('transfer-eta');
 
-      if (statusEl) statusEl.innerText = currentStatusText;
+      if (statusEl) statusEl.innerText = targetStatusText;
 
       if (speedEl) {
-        if (currentStatusText === 'Delivered') {
+        if (targetStatusText === 'Delivered') {
           speedEl.innerText = 'Completed';
         } else if (speed >= 1024 * 1024) {
           speedEl.innerText = (speed / (1024 * 1024)).toFixed(1) + ' MB/s';
@@ -724,9 +713,9 @@
       }
 
       if (etaEl) {
-        if (currentStatusText === 'Delivered') {
+        if (targetStatusText === 'Delivered') {
           etaEl.innerText = '';
-        } else if (remainingSecs !== null && isFinite(remainingSecs) && currentFileSize > 0) {
+        } else if (remainingSecs !== null && isFinite(remainingSecs) && total > 0) {
           etaEl.innerText = remainingSecs < 60
             ? `ETA: ~${Math.ceil(remainingSecs)}s`
             : `ETA: ~${Math.ceil(remainingSecs / 60)}m`;
@@ -736,36 +725,17 @@
       }
     }
 
-    function startUILoop() {
-      stopUILoop();
-      uiUpdateTimer = setInterval(renderTick, 100);
-      renderTick();
-    }
-
-    function stopUILoop() {
-      if (uiUpdateTimer) {
-        clearInterval(uiUpdateTimer);
-        uiUpdateTimer = null;
-      }
-    }
-
     function cancelAndReset() {
       isCancelled = true;
       releaseWakeLock();
-      stopUILoop();
 
-      if (rawDataChannel && rawDataChannel.readyState === 'open') {
-        try { rawDataChannel.send(JSON.stringify({ type: 'TRANSFER_CANCEL' })); } catch (_) {}
+      if (conn && conn.open) {
+        try { conn.send(JSON.stringify({ type: 'TRANSFER_CANCEL' })); } catch (_) {}
       }
 
-      if (rawDataChannel) {
-        try { rawDataChannel.close(); } catch (_) {}
-        rawDataChannel = null;
-      }
-
-      if (activeConnection) {
-        try { activeConnection.close(); } catch (_) {}
-        activeConnection = null;
+      if (conn) {
+        try { conn.close(); } catch (_) {}
+        conn = null;
       }
 
       if (peer) {
@@ -776,8 +746,6 @@
       fileQueue = [];
       currentFileIndex = 0;
       currentBatchTotal = 0;
-      currentTransferredBytes = 0;
-      currentFileSize = 0;
       sessionCode = null;
       isSender = false;
 
@@ -788,8 +756,8 @@
     }
 
     function sendMoreFiles() {
-      if (!rawDataChannel || rawDataChannel.readyState !== 'open') {
-        showToast('Connection closed. Please start a new transfer.');
+      if (!conn || !conn.open) {
+        showToast('Connection closed. Please start a new session.');
         cancelAndReset();
         return;
       }
@@ -877,21 +845,15 @@
       document.getElementById('transfer-actions').classList.remove('hidden');
       document.getElementById('completion-actions').classList.add('hidden');
 
-      currentStatusText = statusText;
-      currentTransferredBytes = 0;
-      currentFileSize = fileSize || 0;
+      targetStatusText = statusText;
       transferStartTime = Date.now();
-
-      setProgressPercent(0);
-      startUILoop();
+      updateProgress(0, fileSize || 0, true);
       requestWakeLock();
     }
 
     function showBatchComplete(count, roleIsSender) {
-      currentStatusText = 'Delivered';
-      currentTransferredBytes = currentFileSize;
-      renderTick();
-      stopUILoop();
+      targetStatusText = 'Delivered';
+      updateProgress(1, 1, true);
       releaseWakeLock();
 
       try {
@@ -946,8 +908,8 @@
 
       isCancelled = false;
 
-      // Re-use connection if already established
-      if (rawDataChannel && rawDataChannel.readyState === 'open') {
+      // Re-use connection if active
+      if (conn && conn.open) {
         fileQueue = files;
         currentBatchTotal = files.length;
         currentFileIndex = 0;
@@ -998,32 +960,22 @@
         }
       });
 
-      peer.on('connection', (conn) => {
-        if (activeConnection && activeConnection !== conn) {
-          try { conn.close(); } catch (_) {}
+      peer.on('connection', (c) => {
+        if (conn && conn !== c) {
+          try { c.close(); } catch (_) {}
           return;
         }
 
-        activeConnection = conn;
+        conn = c;
 
-        const onOpen = () => {
-          if (!activeConnection || activeConnection !== conn || isCancelled) return;
-          try {
-            rawDataChannel = conn.dataChannel;
-            rawDataChannel.binaryType = 'arraybuffer';
-            setupSenderChannel();
-            beginNextFileInQueue();
-          } catch (e) {
-            console.error(e);
-            showToast('Failed to initialize channel.');
-          }
-        };
-
-        if (conn.open) onOpen();
-        else conn.on('open', onOpen);
+        conn.on('open', () => {
+          if (isCancelled) return;
+          setupSenderChannel();
+          beginNextFileInQueue();
+        });
 
         conn.on('close', () => {
-          if (!isCancelled && rawDataChannel) {
+          if (!isCancelled) {
             showToast('Connection closed.');
             cancelAndReset();
           }
@@ -1061,32 +1013,22 @@
       }
 
       const startConnection = () => {
-        activeConnection = peer.connect(targetPeerId, { reliable: true });
+        conn = peer.connect(targetPeerId, { reliable: true });
 
-        const onOpen = () => {
-          if (!activeConnection || isCancelled) return;
-          try {
-            rawDataChannel = activeConnection.dataChannel;
-            rawDataChannel.binaryType = 'arraybuffer';
-            setupReceiverChannel();
-          } catch (e) {
-            console.error(e);
-            showToast('Failed to open data channel.');
-          }
-        };
+        conn.on('open', () => {
+          if (isCancelled) return;
+          setupReceiverChannel();
+        });
 
-        if (activeConnection.open) onOpen();
-        else activeConnection.on('open', onOpen);
-
-        activeConnection.on('error', (err) => {
+        conn.on('error', (err) => {
           console.error(err);
-          currentStatusText = 'Connection failed.';
-          renderTick();
+          targetStatusText = 'Connection failed.';
+          updateProgress(0, 0, true);
           showToast('Could not connect to sender.');
         });
 
-        activeConnection.on('close', () => {
-          if (!isCancelled && rawDataChannel) {
+        conn.on('close', () => {
+          if (!isCancelled) {
             showToast('Sender closed session.');
             cancelAndReset();
           }
@@ -1097,18 +1039,16 @@
       else if (peer) peer.once('open', startConnection);
     }
 
-    // High performance receiver
+    // High performance receiver (Pure ArrayBuffer collection)
     function setupReceiverChannel() {
       let currentMeta = null;
-      let chunkBatches = [];
-      let currentBlobParts = [];
-      let currentBlobPartsSize = 0;
+      let chunks = [];
+      let receivedBytes = 0;
       let batchCount = 1;
       let batchIndex = 0;
 
-      rawDataChannel.onmessage = (event) => {
+      conn.on('data', (data) => {
         if (isCancelled) return;
-        const data = event.data;
 
         if (typeof data === 'string') {
           let msg;
@@ -1127,11 +1067,8 @@
               size: msg.size,
               mime: msg.mime || 'application/octet-stream'
             };
-            chunkBatches = [];
-            currentBlobParts = [];
-            currentBlobPartsSize = 0;
-            currentTransferredBytes = 0;
-            currentFileSize = currentMeta.size;
+            chunks = [];
+            receivedBytes = 0;
             transferStartTime = Date.now();
 
             initTransferView(
@@ -1146,13 +1083,8 @@
           }
 
           if (msg.type === 'FILE_END' && currentMeta) {
-            if (currentBlobParts.length > 0) {
-              chunkBatches.push(new Blob(currentBlobParts));
-              currentBlobParts = [];
-            }
-
-            const finalBlob = new Blob(chunkBatches, { type: currentMeta.mime });
-            const url = URL.createObjectURL(finalBlob);
+            const blob = new Blob(chunks, { type: currentMeta.mime });
+            const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
             a.download = currentMeta.name;
@@ -1162,7 +1094,7 @@
             a.remove();
             setTimeout(() => URL.revokeObjectURL(url), 30000);
 
-            chunkBatches = [];
+            chunks = [];
             currentMeta = null;
 
             if (batchIndex >= batchCount) {
@@ -1178,51 +1110,41 @@
           return;
         }
 
-        // Direct binary ingest
+        // Direct binary ingestion
         if (currentMeta) {
-          let byteLen = 0;
           if (data instanceof ArrayBuffer) {
-            currentBlobParts.push(data);
-            byteLen = data.byteLength;
+            chunks.push(data);
+            receivedBytes += data.byteLength;
           } else if (ArrayBuffer.isView(data)) {
             const buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-            currentBlobParts.push(buf);
-            byteLen = data.byteLength;
+            chunks.push(buf);
+            receivedBytes += buf.byteLength;
           }
 
-          currentTransferredBytes += byteLen;
-          currentBlobPartsSize += byteLen;
-
-          // Commit to sub-blob to avoid memory exhaustion
-          if (currentBlobPartsSize >= RECEIVER_PARTITION) {
-            chunkBatches.push(new Blob(currentBlobParts));
-            currentBlobParts = [];
-            currentBlobPartsSize = 0;
-          }
+          updateProgress(receivedBytes, currentMeta.size);
         }
-      };
+      });
     }
 
-    // High performance sender
     function setupSenderChannel() {
-      rawDataChannel.onmessage = (event) => {
-        if (typeof event.data !== 'string') return;
+      conn.on('data', (data) => {
+        if (typeof data !== 'string') return;
         let msg;
-        try { msg = JSON.parse(event.data); } catch (_) { return; }
+        try { msg = JSON.parse(data); } catch (_) { return; }
 
         if (msg.type === 'TRANSFER_CANCEL') {
           showToast('Receiver cancelled transfer.');
           cancelAndReset();
         }
-      };
+      });
     }
 
     async function beginNextFileInQueue() {
-      if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') return;
+      if (isCancelled || !conn || !conn.open) return;
 
       if (currentFileIndex === 0) {
         try {
-          rawDataChannel.send(JSON.stringify({ type: 'BATCH_META', count: currentBatchTotal }));
+          conn.send(JSON.stringify({ type: 'BATCH_META', count: currentBatchTotal }));
         } catch (_) {}
       }
 
@@ -1246,8 +1168,8 @@
       } catch (err) {
         console.error('Send error:', err);
         if (!isCancelled) {
-          currentStatusText = 'Transfer error.';
-          renderTick();
+          targetStatusText = 'Transfer error.';
+          updateProgress(0, 0, true);
           showToast('Failed to send ' + file.name);
           return;
         }
@@ -1259,15 +1181,15 @@
     }
 
     async function sendSingleFile(file) {
-      const dc = rawDataChannel;
-      if (!dc || dc.readyState !== 'open') return;
+      if (!conn || !conn.open) return;
 
-      dc.bufferedAmountLowThreshold = BUFFER_THRESHOLD;
+      const dc = conn.dataChannel;
+      if (dc) dc.bufferedAmountLowThreshold = BUFFER_LIMIT;
 
-      // Safe drain mechanism that prevents deadlocks
+      // Smooth floating drain (Never stops dead)
       const waitForDrain = () => {
-        if (!dc || dc.bufferedAmount <= BUFFER_THRESHOLD) return Promise.resolve();
-        return new Promise(resolve => {
+        if (!dc || dc.bufferedAmount <= BUFFER_LIMIT) return Promise.resolve();
+        return new Promise((resolve) => {
           let timer = null;
           const onLow = () => {
             clearTimeout(timer);
@@ -1275,12 +1197,12 @@
             resolve();
           };
           dc.addEventListener('bufferedamountlow', onLow, { once: true });
-          timer = setTimeout(onLow, 50); // Fallback: never stall
+          timer = setTimeout(onLow, 50); // safety fallback
         });
       };
 
       // Header
-      dc.send(JSON.stringify({
+      conn.send(JSON.stringify({
         type: 'FILE_START',
         name: file.name,
         size: file.size,
@@ -1288,38 +1210,40 @@
       }));
 
       let offset = 0;
-      currentTransferredBytes = 0;
-      currentFileSize = file.size;
       transferStartTime = Date.now();
 
-      // Continuous pipeline loop
+      // Read ahead 1 MB from disk into memory, then slice 64 KB from RAM
       while (offset < file.size) {
-        if (isCancelled || dc.readyState !== 'open') break;
+        if (isCancelled || !conn.open) break;
 
-        // If pipeline is full, pause until drained below threshold
-        if (dc.bufferedAmount >= BUFFER_HIGH) {
+        const blockEnd = Math.min(offset + BLOCK_SIZE, file.size);
+        const blockSlice = file.slice(offset, blockEnd);
+        const blockBuffer = await blockSlice.arrayBuffer();
+
+        let blockOffset = 0;
+        while (blockOffset < blockBuffer.byteLength) {
+          if (isCancelled || !conn.open) break;
+
           await waitForDrain();
-          if (isCancelled || dc.readyState !== 'open') break;
+
+          const chunkEnd = Math.min(blockOffset + CHUNK_SIZE, blockBuffer.byteLength);
+          const chunk = blockBuffer.slice(blockOffset, chunkEnd);
+
+          conn.send(chunk);
+          blockOffset = chunkEnd;
+          offset += chunk.byteLength;
+
+          updateProgress(offset, file.size);
         }
-
-        const end = Math.min(offset + CHUNK_SIZE, file.size);
-        const slice = file.slice(offset, end);
-        const buffer = await slice.arrayBuffer();
-
-        if (isCancelled || dc.readyState !== 'open') break;
-
-        dc.send(buffer);
-        offset = end;
-        currentTransferredBytes = offset;
       }
 
-      // Ensure buffer is fully transmitted over the wire
-      while (dc.bufferedAmount > 0 && !isCancelled && dc.readyState === 'open') {
-        await new Promise(r => setTimeout(r, 40));
+      // Allow final packet to clear
+      while (dc && dc.bufferedAmount > 0 && !isCancelled && conn.open) {
+        await new Promise(r => setTimeout(r, 20));
       }
 
-      if (!isCancelled && dc.readyState === 'open') {
-        dc.send(JSON.stringify({ type: 'FILE_END' }));
+      if (!isCancelled && conn.open) {
+        conn.send(JSON.stringify({ type: 'FILE_END' }));
       }
     }
 
@@ -1338,8 +1262,8 @@
     });
 
     window.addEventListener('beforeunload', () => {
-      if (rawDataChannel && rawDataChannel.readyState === 'open') {
-        try { rawDataChannel.send(JSON.stringify({ type: 'TRANSFER_CANCEL' })); } catch (_) {}
+      if (conn && conn.open) {
+        try { conn.send(JSON.stringify({ type: 'TRANSFER_CANCEL' })); } catch (_) {}
       }
     });
   </script>
