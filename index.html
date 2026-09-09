@@ -669,16 +669,17 @@
     let handshakeTimer = null;
     let isPumpingData = false;
 
-    // High-Throughput Pipeline Settings (Maximum Wi-Fi/LAN Speed)
-    const CHUNK_SIZE = 64 * 1024; // 64 KB (Universal WebRTC standard)
-    const BATCH_SIZE = 4 * 1024 * 1024; // 4 MB disk slice
-    const HIGH_WATERMARK = 4 * 1024 * 1024; // 4 MB buffer ceiling to maximize throughput
-    const LOW_WATERMARK = 1024 * 1024; // 1 MB trigger threshold
+    // Continuous Flow Settings: Eliminates burst-and-pause fluctuations
+    const CHUNK_SIZE = 64 * 1024; // 64 KB (Universal optimal SCTP frame)
+    const BATCH_SIZE = 2 * 1024 * 1024; // 2 MB memory slice
+    const HIGH_WATERMARK = 1024 * 1024; // 1 MB ceiling (prevents bufferbloat)
+    const LOW_WATERMARK = 256 * 1024; // 256 KB floor (immediate refill, no stalling)
 
+    // Rolling 1-second sample window for a completely flat & stable speed display
     let speedTracker = {
-      lastTime: 0,
-      lastBytes: 0,
-      currentSpeed: 0
+      samples: [], // Array of { time, bytes }
+      displayedSpeed: '0.0 MB/s',
+      displayedEta: 'calculating...'
     };
 
     function showToast(message) {
@@ -930,8 +931,7 @@
       let meta = null;
       let receivedBytes = 0;
 
-      speedTracker.lastTime = performance.now();
-      speedTracker.lastBytes = 0;
+      speedTracker.samples = [];
 
       rawDataChannel.onmessage = (event) => {
         if (isCancelled) return;
@@ -944,8 +944,7 @@
               meta = msg;
               receivedChunks = [];
               receivedBytes = 0;
-              speedTracker.lastTime = performance.now();
-              speedTracker.lastBytes = 0;
+              speedTracker.samples = [];
 
               initTransferView('RECEIVING FILE', 'Receiving file...', 0, meta.name, meta.size);
 
@@ -1043,9 +1042,7 @@
 
     async function pumpBatchedStream(file) {
       let fileOffset = 0;
-      speedTracker.lastTime = performance.now();
-      speedTracker.lastBytes = 0;
-      speedTracker.currentSpeed = 0;
+      speedTracker.samples = [];
       updateProgressHUD(0, 'Sending file...');
 
       if (rawDataChannel) {
@@ -1063,7 +1060,7 @@
         while (batchSubOffset < batchBuffer.byteLength) {
           if (isCancelled) return;
 
-          // Non-blocking high watermark sliding pipeline
+          // Tight pacing window: drains in just ~40ms, preventing burst-and-stop oscillations
           if (rawDataChannel.bufferedAmount > HIGH_WATERMARK) {
             await new Promise((resolve) => {
               let unhooked = false;
@@ -1078,7 +1075,6 @@
 
               rawDataChannel.onbufferedamountlow = onBufferLow;
 
-              // Safety watchdog avoids browser event deadlock
               const safetyCheck = setInterval(() => {
                 if (isCancelled || !rawDataChannel || rawDataChannel.readyState !== 'open') {
                   clearInterval(safetyCheck);
@@ -1086,7 +1082,7 @@
                 } else if (rawDataChannel.bufferedAmount <= LOW_WATERMARK) {
                   onBufferLow();
                 }
-              }, 6);
+              }, 4);
             });
           }
 
@@ -1109,37 +1105,40 @@
     }
 
     function updateSpeedMetrics(currentBytes, totalBytes, now) {
-      const timeDiff = (now - speedTracker.lastTime) / 1000;
-      if (timeDiff < 0.25) return;
+      // Record sample
+      speedTracker.samples.push({ time: now, bytes: currentBytes });
 
-      const bytesDiff = currentBytes - speedTracker.lastBytes;
-      const instantSpeed = bytesDiff / timeDiff;
-
-      // Exponential Moving Average (EMA) to eliminate jumpy fluctuations
-      if (speedTracker.currentSpeed === 0) {
-        speedTracker.currentSpeed = instantSpeed;
-      } else {
-        speedTracker.currentSpeed = speedTracker.currentSpeed * 0.65 + instantSpeed * 0.35;
+      // Keep only samples from the last 1000ms
+      const cutoffTime = now - 1000;
+      while (speedTracker.samples.length > 2 && speedTracker.samples[0].time < cutoffTime) {
+        speedTracker.samples.shift();
       }
 
-      const speedBps = speedTracker.currentSpeed;
+      const oldest = speedTracker.samples[0];
+      const durationSeconds = (now - oldest.time) / 1000;
 
-      let speedText = '0.0 MB/s';
-      if (speedBps >= 1024 * 1024) {
-        speedText = (speedBps / (1024 * 1024)).toFixed(1) + ' MB/s';
-      } else if (speedBps > 0) {
-        speedText = (speedBps / 1024).toFixed(0) + ' KB/s';
+      // Update calculations once every 200ms or on sufficient time window
+      if (durationSeconds >= 0.3) {
+        const bytesDiff = currentBytes - oldest.bytes;
+        const speedBps = bytesDiff / durationSeconds;
+
+        let speedText = '0.0 MB/s';
+        if (speedBps >= 1024 * 1024) {
+          speedText = (speedBps / (1024 * 1024)).toFixed(1) + ' MB/s';
+        } else if (speedBps > 0) {
+          speedText = (speedBps / 1024).toFixed(0) + ' KB/s';
+        }
+
+        const remainingBytes = Math.max(0, totalBytes - currentBytes);
+        const remainingSecs = speedBps > 0 ? Math.round(remainingBytes / speedBps) : 0;
+        const etaText = remainingSecs > 0 ? `ETA: ${remainingSecs}s` : (currentBytes >= totalBytes ? 'Done' : 'ETA: finalizing...');
+
+        speedTracker.displayedSpeed = speedText;
+        speedTracker.displayedEta = etaText;
       }
 
-      const remainingBytes = Math.max(0, totalBytes - currentBytes);
-      const remainingSecs = speedBps > 0 ? Math.round(remainingBytes / speedBps) : 0;
-      const etaText = remainingSecs > 0 ? `ETA: ${remainingSecs}s` : (currentBytes >= totalBytes ? 'Done' : 'ETA: finalizing...');
-
-      document.getElementById('transfer-speed').innerText = speedText;
-      document.getElementById('transfer-eta').innerText = etaText;
-
-      speedTracker.lastTime = now;
-      speedTracker.lastBytes = currentBytes;
+      document.getElementById('transfer-speed').innerText = speedTracker.displayedSpeed;
+      document.getElementById('transfer-eta').innerText = speedTracker.displayedEta;
     }
 
     function updateProgressHUD(percent, label) {
