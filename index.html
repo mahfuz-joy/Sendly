@@ -343,6 +343,26 @@
       box-shadow: 0 0 0 2px rgba(91, 104, 246, 0.25);
     }
 
+    .separator-line {
+      display: flex;
+      align-items: center;
+      text-align: center;
+      margin: 18px 0;
+      color: #4b5563;
+      font-size: 12px;
+    }
+
+    .separator-line::before,
+    .separator-line::after {
+      content: '';
+      flex: 1;
+      border-bottom: 1px solid #1f283a;
+    }
+
+    .separator-line span {
+      padding: 0 10px;
+    }
+
     .file-meta-card {
       background: #0d1118;
       border: 1px solid #1e2638;
@@ -503,7 +523,7 @@
     <div id="view-send" class="hidden">
       <div class="view-header">
         <button class="back-btn" onclick="cancelAndReset()">&#8249;</button>
-        <span class="header-title">SEND: SHARE CODE</span>
+        <span class="header-title">SEND &mdash; SHARE CODE</span>
       </div>
 
       <div class="code-display-box">
@@ -522,7 +542,7 @@
     <div id="view-receive" class="hidden">
       <div class="view-header">
         <button class="back-btn" onclick="cancelAndReset()">&#8249;</button>
-        <span class="header-title">RECEIVE: ENTER CODE</span>
+        <span class="header-title">RECEIVE &mdash; ENTER CODE</span>
       </div>
 
       <p class="input-instruction">ENTER CODE</p>
@@ -536,6 +556,10 @@
       </div>
 
       <button id="btn-connect" class="primary-btn" onclick="connectWithCode()" disabled>Connect</button>
+
+      <div class="separator-line"><span>or</span></div>
+
+      <button class="action-btn-outline" onclick="showToast('Enter the 6-digit code or scan with phone camera.')">Scan QR Code</button>
       <button class="cancel-btn" onclick="cancelAndReset()">Cancel</button>
     </div>
 
@@ -586,12 +610,11 @@
         </div>
       </div>
 
-      <!-- Action Buttons in Transfer View -->
+      <!-- Action Buttons -->
       <div id="transfer-actions">
         <button id="btn-cancel-transfer" class="cancel-btn" style="margin-top: 4px;" onclick="cancelAndReset()">Cancel Transfer</button>
       </div>
 
-      <!-- Completion Actions -->
       <div id="completion-actions" class="hidden">
         <button class="primary-btn" onclick="sendAnotherFile()">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -604,31 +627,63 @@
   </div>
 
   <script>
-    // Robust STUN + TURN config for 100% reliable connection on Mobile Hotspot & Wi-Fi
+    // Robust STUN servers for seamless WebRTC NAT/Hotspot discovery
     const PEER_CONFIG = {
       config: {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'turn:openrelay.metered.ca:80', username: 'openrelay', credential: 'openrelay' },
-          { urls: 'turn:openrelay.metered.ca:443', username: 'openrelay', credential: 'openrelay' }
-        ]
+          { urls: 'stun:stun2.l.google.com:19302' },
+          {
+            urls: 'stun:stun.relay.metered.ca:80'
+          },
+          {
+            urls: 'turn:global.relay.metered.ca:80',
+            username: 'YOUR_USERNAME',
+            credential: 'YOUR_CREDENTIAL'
+          },
+          {
+            urls: 'turn:global.relay.metered.ca:80?transport=tcp',
+            username: 'YOUR_USERNAME',
+            credential: 'YOUR_CREDENTIAL'
+          },
+          {
+            urls: 'turn:global.relay.metered.ca:443',
+            username: 'YOUR_USERNAME',
+            credential: 'YOUR_CREDENTIAL'
+          },
+          {
+            urls: 'turns:global.relay.metered.ca:443?transport=tcp',
+            username: 'YOUR_USERNAME',
+            credential: 'YOUR_CREDENTIAL'
+          }
+        ],
+        sdpSemantics: 'unified-plan'
       }
     };
 
     let peer = null;
-    let conn = null;
+    let activeConnection = null;
+    let rawDataChannel = null;
     let selectedFile = null;
     let isCancelled = false;
+    let isSender = false;
 
-    const CHUNK_SIZE = 64 * 1024;
-    let speedTracker = { lastTime: 0, lastBytes: 0 };
+    const CHUNK_SIZE = 256 * 1024;
+    const BATCH_SIZE = 4 * 1024 * 1024;
+
+    let speedTracker = {
+      lastTime: 0,
+      lastBytes: 0
+    };
 
     function showToast(message) {
       const toast = document.getElementById('toast');
       toast.innerText = message;
       toast.classList.add('show');
-      setTimeout(() => toast.classList.remove('show'), 2500);
+      setTimeout(() => {
+        toast.classList.remove('show');
+      }, 2500);
     }
 
     function generateSixDigitCode() {
@@ -652,17 +707,21 @@
 
     function cancelAndReset() {
       isCancelled = true;
-      if (conn) {
+      if (rawDataChannel && rawDataChannel.readyState === 'open') {
         try {
-          conn.send({ type: 'control-cancel' });
-          conn.close();
-        } catch(e) {}
-        conn = null;
+          rawDataChannel.send(JSON.stringify({ type: 'control-cancel' }));
+          rawDataChannel.close();
+        } catch (e) {}
+      }
+      if (activeConnection) {
+        try { activeConnection.close(); } catch (e) {}
+        activeConnection = null;
       }
       if (peer) {
-        try { peer.destroy(); } catch(e) {}
+        try { peer.destroy(); } catch (e) {}
         peer = null;
       }
+      rawDataChannel = null;
       selectedFile = null;
       document.getElementById('hidden-file-input').value = '';
       showView('view-home');
@@ -670,10 +729,13 @@
 
     function sendAnotherFile() {
       cancelAndReset();
-      setTimeout(() => document.getElementById('hidden-file-input').click(), 150);
+      setTimeout(() => {
+        document.getElementById('hidden-file-input').click();
+      }, 150);
     }
 
     function openReceiveView() {
+      isSender = false;
       showView('view-receive');
       setupOtpInputs();
       if (!peer) initReceiverPeer();
@@ -684,6 +746,7 @@
       if (!file) return;
       selectedFile = file;
       isCancelled = false;
+      isSender = true;
 
       const code = generateSixDigitCode();
       const peerId = 'sendly-' + code;
@@ -691,7 +754,9 @@
       if (peer) peer.destroy();
       peer = new Peer(peerId, PEER_CONFIG);
 
-      peer.on('error', (err) => showToast('Notice: ' + err.type));
+      peer.on('error', (err) => {
+        showToast('Connection error: ' + err.type);
+      });
 
       peer.on('open', () => {
         document.getElementById('display-code').innerText = code;
@@ -700,74 +765,28 @@
         const qrContainer = document.getElementById('qrcode');
         qrContainer.innerHTML = '';
         const shareUrl = `${window.location.origin}${window.location.pathname}?code=${code}`;
-        new QRCode(qrContainer, { text: shareUrl, width: 160, height: 160 });
-      });
-
-      peer.on('connection', (incomingConn) => {
-        conn = incomingConn;
-        handleSenderConnection(file);
-      });
-    }
-
-    function handleSenderConnection(file) {
-      initTransferView('SENDING FILE', 'Connecting...', 0, file.name, file.size);
-
-      conn.on('open', () => {
-        conn.send({
-          type: 'file-meta',
-          name: file.name,
-          size: file.size,
-          fileType: file.type
+        new QRCode(qrContainer, {
+          text: shareUrl,
+          width: 160,
+          height: 160,
+          colorDark: '#000000',
+          colorLight: '#ffffff'
         });
-        startSendingChunks(file);
       });
 
-      conn.on('data', (data) => {
-        if (data.type === 'sync-ack') {
-          const progress = Math.min(99, Math.round((data.bytes / file.size) * 100));
-          updateProgressHUD(progress, 'Sending file...');
-        } else if (data.type === 'file-done') {
-          showTransferComplete();
-        } else if (data.type === 'control-cancel') {
-          showToast('Receiver cancelled the transfer.');
-          cancelAndReset();
-        }
+      peer.on('connection', (conn) => {
+        activeConnection = conn;
+
+        activeConnection.on('open', () => {
+          rawDataChannel = activeConnection.dataChannel;
+          rawDataChannel.binaryType = 'arraybuffer';
+          setupRawSenderChannel(selectedFile);
+        });
+
+        activeConnection.on('error', (err) => {
+          showToast('Data channel error.');
+        });
       });
-    }
-
-    async function startSendingChunks(file) {
-      let offset = 0;
-      speedTracker.lastTime = performance.now();
-      speedTracker.lastBytes = 0;
-
-      while (offset < file.size) {
-        if (isCancelled) return;
-
-        const dc = conn.dataChannel;
-        if (dc && dc.bufferedAmount > 256 * 1024) {
-          await new Promise(resolve => {
-            dc.onbufferedamountlow = () => {
-              dc.onbufferedamountlow = null;
-              resolve();
-            };
-          });
-        }
-
-        const slice = file.slice(offset, offset + CHUNK_SIZE);
-        const buffer = await slice.arrayBuffer();
-
-        conn.send(buffer);
-        offset += buffer.byteLength;
-
-        const now = performance.now();
-        if (now - speedTracker.lastTime > 200) {
-          updateSpeedMetrics(offset, file.size, now);
-          speedTracker.lastTime = now;
-          speedTracker.lastBytes = offset;
-        }
-      }
-
-      updateProgressHUD(99, 'Verifying with receiver...');
     }
 
     function copyShareLink() {
@@ -787,9 +806,10 @@
     }
 
     function initReceiverPeer() {
-      if (peer) peer.destroy();
       peer = new Peer(PEER_CONFIG);
-      peer.on('error', (err) => showToast('Notice: ' + err.type));
+      peer.on('error', (err) => {
+        showToast('Network error: ' + err.type);
+      });
     }
 
     function setupOtpInputs() {
@@ -797,11 +817,15 @@
       inputs.forEach((input, idx) => {
         input.value = '';
         input.oninput = (e) => {
-          if (e.target.value.length === 1 && idx < inputs.length - 1) inputs[idx + 1].focus();
+          if (e.target.value.length === 1 && idx < inputs.length - 1) {
+            inputs[idx + 1].focus();
+          }
           checkOtpFilled();
         };
         input.onkeydown = (e) => {
-          if (e.key === 'Backspace' && !e.target.value && idx > 0) inputs[idx - 1].focus();
+          if (e.key === 'Backspace' && !e.target.value && idx > 0) {
+            inputs[idx - 1].focus();
+          }
         };
       });
       inputs[0].focus();
@@ -828,85 +852,28 @@
       const targetPeerId = 'sendly-' + targetCode;
       initTransferView('RECEIVING FILE', 'Connecting to sender...', 0);
 
-      if (!peer || peer.destroyed) {
-        peer = new Peer(PEER_CONFIG);
-        peer.on('open', () => makeReceiverCall(targetPeerId));
-      } else if (peer.open) {
+      if (!peer) peer = new Peer(PEER_CONFIG);
+
+      if (peer.open) {
         makeReceiverCall(targetPeerId);
       } else {
-        peer.on('open', () => makeReceiverCall(targetPeerId));
+        peer.on('open', () => {
+          makeReceiverCall(targetPeerId);
+        });
       }
     }
 
     function makeReceiverCall(targetPeerId) {
-      conn = peer.connect(targetPeerId, { reliable: true });
+      activeConnection = peer.connect(targetPeerId, { reliable: true });
 
-      let receivedChunks = [];
-      let meta = null;
-      let receivedBytes = 0;
-
-      conn.on('open', () => {
-        updateProgressHUD(0, 'Connected. Waiting for file stream...');
+      activeConnection.on('open', () => {
+        rawDataChannel = activeConnection.dataChannel;
+        rawDataChannel.binaryType = 'arraybuffer';
+        setupRawReceiverChannel();
       });
 
-      conn.on('data', (data) => {
-        if (isCancelled) return;
-
-        if (data && data.type === 'file-meta') {
-          meta = data;
-          receivedChunks = [];
-          receivedBytes = 0;
-          speedTracker.lastTime = performance.now();
-          speedTracker.lastBytes = 0;
-          initTransferView('RECEIVING FILE', 'Receiving stream...', 0, meta.name, meta.size);
-          return;
-        }
-
-        if (data && data.type === 'control-cancel') {
-          showToast('Sender cancelled the transfer.');
-          cancelAndReset();
-          return;
-        }
-
-        if (data instanceof ArrayBuffer && meta) {
-          receivedChunks.push(data);
-          receivedBytes += data.byteLength;
-
-          const now = performance.now();
-          if (now - speedTracker.lastTime > 200) {
-            updateSpeedMetrics(receivedBytes, meta.size, now);
-            speedTracker.lastTime = now;
-            speedTracker.lastBytes = receivedBytes;
-
-            try { conn.send({ type: 'sync-ack', bytes: receivedBytes }); } catch(e) {}
-          }
-
-          const progress = Math.min(99, Math.round((receivedBytes / meta.size) * 100));
-          updateProgressHUD(progress, 'Receiving...');
-
-          if (receivedBytes >= meta.size) {
-            updateProgressHUD(100, 'Saving to device...');
-            try { conn.send({ type: 'file-done' }); } catch(e) {}
-
-            const blob = new Blob(receivedChunks, { type: meta.fileType || 'application/octet-stream' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.style.display = 'none';
-            a.href = url;
-            a.download = meta.name;
-            document.body.appendChild(a);
-            a.click();
-            setTimeout(() => {
-              document.body.removeChild(a);
-              URL.revokeObjectURL(url);
-            }, 2000);
-
-            showTransferComplete();
-          }
-        }
-      });
-
-      conn.on('error', () => {
+      activeConnection.on('error', (err) => {
+        updateProgressHUD(0, 'Failed to connect.');
         showToast('Connection failed.');
       });
     }
@@ -925,7 +892,7 @@
       updateProgressHUD(percent, statusText);
     }
 
-    function showTransferComplete() {
+    function showTransferComplete(isSenderSide) {
       document.getElementById('transfer-icon-area').classList.add('hidden');
       document.getElementById('completion-box').classList.remove('hidden');
       document.getElementById('transfer-actions').classList.add('hidden');
@@ -934,6 +901,162 @@
       updateProgressHUD(100, 'Delivered');
       document.getElementById('transfer-speed').innerText = 'Complete';
       document.getElementById('transfer-eta').innerText = '';
+    }
+
+    function setupRawReceiverChannel() {
+      let receivedChunks = [];
+      let meta = null;
+      let receivedBytes = 0;
+
+      speedTracker.lastTime = performance.now();
+      speedTracker.lastBytes = 0;
+
+      rawDataChannel.onmessage = (event) => {
+        if (isCancelled) return;
+        const data = event.data;
+
+        if (typeof data === 'string') {
+          try {
+            const msg = JSON.parse(data);
+            if (msg.type === 'file-meta') {
+              meta = msg;
+              receivedChunks = [];
+              receivedBytes = 0;
+              speedTracker.lastTime = performance.now();
+              speedTracker.lastBytes = 0;
+
+              initTransferView('RECEIVING FILE', 'Starting stream...', 0, meta.name, meta.size);
+            } else if (msg.type === 'control-cancel') {
+              showToast('Sender cancelled the transfer.');
+              cancelAndReset();
+            }
+          } catch (e) {}
+          return;
+        }
+
+        if (data instanceof ArrayBuffer && meta) {
+          receivedChunks.push(data);
+          receivedBytes += data.byteLength;
+
+          const now = performance.now();
+          if (now - speedTracker.lastTime > 200) {
+            updateSpeedMetrics(receivedBytes, meta.size, now);
+            speedTracker.lastTime = now;
+            speedTracker.lastBytes = receivedBytes;
+
+            try {
+              rawDataChannel.send(JSON.stringify({
+                type: 'sync-ack',
+                bytes: receivedBytes
+              }));
+            } catch (e) {}
+          }
+
+          const progress = Math.min(99, Math.round((receivedBytes / meta.size) * 100));
+          updateProgressHUD(progress, 'Receiving...');
+
+          if (receivedBytes >= meta.size) {
+            updateProgressHUD(100, 'Saving to device...');
+
+            try {
+              rawDataChannel.send(JSON.stringify({ type: 'file-done' }));
+            } catch (e) {}
+
+            const blob = new Blob(receivedChunks, { type: meta.fileType || 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = meta.name;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => {
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+            }, 2000);
+
+            showTransferComplete(false);
+          }
+        }
+      };
+    }
+
+    async function setupRawSenderChannel(file) {
+      initTransferView('SENDING FILE', 'Preparing transfer...', 0, file.name, file.size);
+
+      rawDataChannel.send(JSON.stringify({
+        type: 'file-meta',
+        name: file.name,
+        size: file.size,
+        fileType: file.type
+      }));
+
+      rawDataChannel.onmessage = (event) => {
+        if (typeof event.data === 'string') {
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'sync-ack') {
+              const progress = Math.min(99, Math.round((msg.bytes / file.size) * 100));
+              updateProgressHUD(progress, 'Sending file...');
+            } else if (msg.type === 'file-done') {
+              showTransferComplete(true);
+            } else if (msg.type === 'control-cancel') {
+              showToast('Receiver cancelled the transfer.');
+              cancelAndReset();
+            }
+          } catch (e) {}
+        }
+      };
+
+      rawDataChannel.bufferedAmountLowThreshold = 4 * 1024 * 1024;
+
+      let fileOffset = 0;
+      speedTracker.lastTime = performance.now();
+      speedTracker.lastBytes = 0;
+
+      async function pumpBatchedStream() {
+        while (fileOffset < file.size) {
+          if (isCancelled) return;
+
+          const batchEnd = Math.min(fileOffset + BATCH_SIZE, file.size);
+          const batchSlice = file.slice(fileOffset, batchEnd);
+          const batchBuffer = await batchSlice.arrayBuffer();
+
+          let batchSubOffset = 0;
+          while (batchSubOffset < batchBuffer.byteLength) {
+            if (isCancelled) return;
+
+            if (rawDataChannel.bufferedAmount > rawDataChannel.bufferedAmountLowThreshold) {
+              await new Promise((resolve) => {
+                rawDataChannel.onbufferedamountlow = () => {
+                  rawDataChannel.onbufferedamountlow = null;
+                  resolve();
+                };
+              });
+            }
+
+            if (rawDataChannel.readyState !== 'open') return;
+
+            const sendEnd = Math.min(batchSubOffset + CHUNK_SIZE, batchBuffer.byteLength);
+            const chunk = batchBuffer.slice(batchSubOffset, sendEnd);
+            rawDataChannel.send(chunk);
+
+            batchSubOffset += chunk.byteLength;
+            fileOffset += chunk.byteLength;
+
+            const now = performance.now();
+            if (now - speedTracker.lastTime > 200) {
+              updateSpeedMetrics(fileOffset, file.size, now);
+              speedTracker.lastTime = now;
+              speedTracker.lastBytes = fileOffset;
+            }
+          }
+        }
+
+        updateProgressHUD(99, 'Verifying with receiver...');
+      }
+
+      pumpBatchedStream();
     }
 
     function updateSpeedMetrics(currentBytes, totalBytes, now) {
