@@ -1,540 +1,1436 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Sendly: Direct P2P Transfer</title>
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0a0f;color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center}
-.container{width:100%;max-width:480px;padding:20px}
-.logo{text-align:center;margin-bottom:30px}
-.logo h1{font-size:2.2rem;background:linear-gradient(135deg,#667eea,#764ba2);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:5px}
-.logo p{color:#888;font-size:0.9rem}
-.tabs{display:flex;gap:10px;margin-bottom:25px}
-.tab{flex:1;padding:14px;border:none;border-radius:12px;font-size:1rem;font-weight:600;cursor:pointer;transition:all 0.3s}
-.tab.send{background:#1a1a2e;color:#667eea}
-.tab.receive{background:#1a1a2e;color:#764ba2}
-.tab.active.send{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff}
-.tab.active.receive{background:linear-gradient(135deg,#764ba2,#667eea);color:#fff}
-.panel{display:none;background:#12121a;border-radius:16px;padding:30px;border:1px solid #1e1e2e}
-.panel.active{display:block}
-.code-display{background:#1a1a2e;border-radius:12px;padding:20px;text-align:center;margin:20px 0;font-size:2.5rem;font-weight:700;letter-spacing:8px;color:#667eea}
-.input-group{margin:15px 0}
-.input-group input{width:100%;padding:14px 18px;border-radius:10px;border:2px solid #2a2a3e;background:#1a1a2e;color:#fff;font-size:1rem;outline:none;transition:border 0.3s}
-.input-group input:focus{border-color:#667eea}
-.btn{width:100%;padding:14px;border:none;border-radius:10px;font-size:1rem;font-weight:600;cursor:pointer;transition:all 0.3s;margin-top:10px}
-.btn-primary{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff}
-.btn-primary:hover{transform:translateY(-2px);box-shadow:0 8px 25px rgba(102,126,234,0.3)}
-.btn-secondary{background:#1a1a2e;color:#888;border:1px solid #2a2a3e}
-.btn-danger{background:#e74c3c;color:#fff}
-.file-drop{border:2px dashed #2a2a3e;border-radius:12px;padding:40px;text-align:center;cursor:pointer;transition:all 0.3s;margin:15px 0}
-.file-drop:hover,.file-drop.dragover{border-color:#667eea;background:rgba(102,126,234,0.05)}
-.file-drop p{color:#888;margin-top:10px}
-.file-drop .icon{font-size:3rem}
-.progress-section{display:none;margin-top:20px}
-.file-info{display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;padding:12px;background:#1a1a2e;border-radius:8px}
-.file-name{font-weight:600;font-size:0.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px}
-.file-size{color:#888;font-size:0.85rem}
-.progress-bar-container{width:100%;height:8px;background:#1a1a2e;border-radius:4px;overflow:hidden;margin:10px 0}
-.progress-bar{height:100%;background:linear-gradient(90deg,#667eea,#764ba2);border-radius:4px;transition:width 0.1s linear;width:0%}
-.stats{display:flex;justify-content:space-between;color:#888;font-size:0.85rem;margin-top:8px}
-.status{text-align:center;padding:10px;color:#667eea;font-size:0.9rem}
-.status.error{color:#e74c3c}
-.status.success{color:#2ecc71}
-.hidden{display:none!important}
-.copy-btn{background:none;border:1px solid #2a2a3e;color:#888;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:0.85rem;margin-top:10px;transition:all 0.3s}
-.copy-btn:hover{border-color:#667eea;color:#667eea}
-.file-list{margin:10px 0;max-height:200px;overflow-y:auto}
-.file-item{display:flex;justify-content:space-between;align-items:center;padding:10px;background:#1a1a2e;border-radius:8px;margin-bottom:8px;font-size:0.85rem}
-.file-item .remove{color:#e74c3c;cursor:pointer;font-weight:bold}
-.spinner{display:inline-block;width:20px;height:20px;border:2px solid #667eea;border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;margin-right:8px;vertical-align:middle}
-@keyframes spin{to{transform:rotate(360deg)}}
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Sendly: Direct P2P Transfer</title>
+  <meta name="theme-color" content="#5b68f6">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <script>
+    (function() {
+      const canvas = document.createElement('canvas');
+      canvas.width = 512;
+      canvas.height = 512;
+      const ctx = canvas.getContext('2d');
+      const grad = ctx.createLinearGradient(0, 0, 512, 512);
+      grad.addColorStop(0, '#6366f1');
+      grad.addColorStop(1, '#4338ca');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 512, 512);
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.moveTo(140, 246);
+      ctx.lineTo(372, 140);
+      ctx.lineTo(266, 372);
+      ctx.lineTo(224, 288);
+      ctx.closePath();
+      ctx.fill();
+      const iconUrl = canvas.toDataURL('image/png');
+      const fav = document.createElement('link');
+      fav.rel = 'icon';
+      fav.type = 'image/png';
+      fav.href = iconUrl;
+      document.head.appendChild(fav);
+    })();
+  </script>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+    body {
+      background-color: #0b0e14;
+      color: #f1f5f9;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      overflow-x: hidden;
+    }
+    .card {
+      background: #141923;
+      border: 1px solid #1e2638;
+      border-radius: 24px;
+      width: 100%;
+      max-width: 410px;
+      padding: 28px 24px;
+      text-align: center;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.75);
+      position: relative;
+      overflow: hidden;
+      contain: content;
+    }
+    .brand-icon {
+      width: 64px;
+      height: 64px;
+      background: linear-gradient(135deg, #6366f1, #4338ca);
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 8px auto 18px;
+      color: #ffffff;
+      box-shadow: 0 12px 28px rgba(91, 104, 246, 0.4);
+    }
+    .brand-name {
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      margin-bottom: 6px;
+      color: #ffffff;
+    }
+    .tagline {
+      color: #7b8a9e;
+      font-size: 14px;
+      margin-bottom: 28px;
+    }
+    .primary-btn {
+      width: 100%;
+      background: #5b68f6;
+      color: #ffffff;
+      border: none;
+      padding: 15px;
+      border-radius: 14px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-bottom: 12px;
+      transition: background 0.2s, transform 0.1s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .primary-btn:active:not(:disabled) {
+      transform: scale(0.98);
+    }
+    .primary-btn:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+    .secondary-btn {
+      width: 100%;
+      background: #1b2232;
+      color: #ffffff;
+      border: 1px solid #28344c;
+      padding: 15px;
+      border-radius: 14px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-bottom: 20px;
+      transition: background 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .secondary-btn:hover {
+      background: #232d42;
+    }
+    .footer-note {
+      font-size: 12px;
+      color: #617085;
+    }
+    .view-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .back-btn {
+      background: transparent;
+      border: none;
+      color: #8b9bb4;
+      font-size: 26px;
+      cursor: pointer;
+      line-height: 1;
+      padding: 4px 8px;
+      border-radius: 8px;
+    }
+    .header-title {
+      font-size: 12px;
+      letter-spacing: 1.5px;
+      font-weight: 700;
+      color: #72849e;
+      text-transform: uppercase;
+    }
+    .code-display-box {
+      background: #0d1118;
+      border: 1px solid #1a2230;
+      border-radius: 16px;
+      padding: 18px 10px;
+      margin-bottom: 16px;
+    }
+    #display-code {
+      font-size: 38px;
+      font-weight: 800;
+      letter-spacing: 8px;
+      color: #ffffff;
+      font-variant-numeric: tabular-nums;
+    }
+    .qr-wrapper {
+      background: #ffffff;
+      border-radius: 16px;
+      padding: 14px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin-bottom: 18px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+    #qrcode {
+      min-height: 160px;
+      min-width: 160px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #qrcode img {
+      margin: 0 auto;
+      border-radius: 4px;
+    }
+    .action-btn-outline {
+      width: 100%;
+      background: #1b2232;
+      color: #ffffff;
+      border: 1px solid #28344c;
+      padding: 13px;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .cancel-btn {
+      width: 100%;
+      background: transparent;
+      color: #ef4444;
+      border: 1px solid #4a1515;
+      padding: 12px;
+      border-radius: 12px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 10px;
+    }
+    .input-instruction {
+      text-align: left;
+      font-size: 11px;
+      letter-spacing: 1.2px;
+      font-weight: 700;
+      color: #72849e;
+      margin-bottom: 14px;
+    }
+    .otp-container {
+      display: flex;
+      justify-content: space-between;
+      gap: 6px;
+      margin-bottom: 22px;
+    }
+    .otp-input {
+      width: 48px;
+      height: 54px;
+      background: #0d1118;
+      border: 1px solid #232c3d;
+      border-radius: 12px;
+      color: #ffffff;
+      text-align: center;
+      font-size: 22px;
+      font-weight: 700;
+      outline: none;
+    }
+    .otp-input:focus {
+      border-color: #5b68f6;
+      box-shadow: 0 0 0 2px rgba(91, 104, 246, 0.25);
+    }
+    .file-meta-card {
+      background: #0d1118;
+      border: 1px solid #1e2638;
+      border-radius: 16px;
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 14px;
+      text-align: left;
+    }
+    .file-icon-box {
+      width: 46px;
+      height: 46px;
+      background: #1b2232;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #5b68f6;
+      flex-shrink: 0;
+    }
+    .file-info-col {
+      overflow: hidden;
+      flex: 1;
+    }
+    .file-name-text {
+      font-size: 14px;
+      font-weight: 600;
+      color: #ffffff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 4px;
+    }
+    .file-size-text {
+      font-size: 12px;
+      color: #7b8a9e;
+    }
+    .batch-pill {
+      font-size: 11px;
+      font-weight: 700;
+      color: #a5b4fc;
+      background: rgba(91, 104, 246, 0.15);
+      border-radius: 20px;
+      padding: 4px 10px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .transfer-hud {
+      background: #0d1118;
+      border: 1px solid #1e2638;
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 18px;
+      text-align: left;
+    }
+    .progress-bar-bg {
+      width: 100%;
+      height: 10px;
+      background: #1b2232;
+      border-radius: 6px;
+      overflow: hidden;
+      margin-bottom: 12px;
+    }
+    #progress-bar-fill {
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, #5b68f6, #10b981);
+      border-radius: 6px;
+      transform: scaleX(0);
+      transform-origin: left center;
+      will-change: transform;
+      contain: strict;
+    }
+    .progress-info {
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+      font-weight: 600;
+      color: #e2e8f0;
+      margin-bottom: 8px;
+    }
+    .speed-info {
+      font-size: 12px;
+      color: #10b981;
+      display: flex;
+      justify-content: space-between;
+      font-weight: 600;
+    }
+    .success-badge {
+      width: 68px;
+      height: 68px;
+      background: rgba(16, 185, 129, 0.15);
+      border: 2px solid #10b981;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 16px auto 16px;
+      color: #10b981;
+    }
+    .toast-msg {
+      position: absolute;
+      top: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1e293b;
+      color: #f8fafc;
+      border: 1px solid #334155;
+      padding: 9px 18px;
+      border-radius: 20px;
+      font-size: 13px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6);
+      z-index: 100;
+      pointer-events: none;
+      transition: opacity 0.25s ease;
+      opacity: 0;
+      white-space: nowrap;
+      max-width: calc(100% - 40px);
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .toast-msg.show {
+      opacity: 1;
+    }
+    .queue-list {
+      max-height: 168px;
+      overflow-y: auto;
+      margin-bottom: 14px;
+      border-radius: 14px;
+    }
+    .queue-item {
+      background: #0d1118;
+      border: 1px solid #1a2230;
+      border-radius: 12px;
+      padding: 11px 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      text-align: left;
+      margin-bottom: 8px;
+    }
+    .queue-item:last-child {
+      margin-bottom: 0;
+    }
+    .queue-item-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: #e2e8f0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex: 1;
+    }
+    .queue-item-size {
+      font-size: 11px;
+      color: #7b8a9e;
+      flex-shrink: 0;
+    }
+    .hidden {
+      display: none !important;
+    }
+  </style>
 </head>
 <body>
-<div class="container">
-<div class="logo">
-<h1>Sendly</h1>
-<p>Fast direct P2P transfer between devices</p>
-</div>
+  <div class="card">
+    <div id="toast" class="toast-msg"></div>
 
-<div class="tabs">
-<button class="tab send active" onclick="switchTab('send')">Send Files</button>
-<button class="tab receive" onclick="switchTab('receive')">Receive Files</button>
-</div>
+    <!-- VIEW 1: HOME -->
+    <div id="view-home">
+      <div class="brand-icon">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="17 8 12 3 7 8"></polyline>
+          <line x1="12" y1="3" x2="12" y2="15"></line>
+        </svg>
+      </div>
+      <h1 class="brand-name">Sendly</h1>
+      <p class="tagline">Fast direct P2P transfer between devices.</p>
+      <input type="file" id="hidden-file-input" multiple style="display: none;" onchange="onFilesPicked(event)">
+      <button class="primary-btn" onclick="document.getElementById('hidden-file-input').click()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Send Files
+      </button>
+      <button class="secondary-btn" onclick="openReceiveView()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Receive File
+      </button>
+      <p class="footer-note">Direct end-to-end encrypted device transfer.</p>
+    </div>
 
-<!-- SEND PANEL -->
-<div class="panel active" id="sendPanel">
-<div id="sendSetup">
-<div class="file-drop" id="fileDrop" onclick="document.getElementById('fileInput').click()">
-<div class="icon">📁</div>
-<p>Drop files here or click to select</p>
-</div>
-<input type="file" id="fileInput" multiple style="display:none">
-<div class="file-list" id="fileList"></div>
-<div class="status" id="sendStatus"></div>
-<button class="btn btn-primary" id="startSendBtn" onclick="startSending()" style="display:none">Start Transfer</button>
-</div>
-<div class="progress-section" id="sendProgress">
-<div class="file-info">
-<span class="file-name" id="sendFileName">-</span>
-<span class="file-size" id="sendFileSize">-</span>
-</div>
-<div class="progress-bar-container"><div class="progress-bar" id="sendBar"></div></div>
-<div class="stats">
-<span id="sendPercent">0%</span>
-<span id="sendSpeed">0 MB/s</span>
-<span id="sendETA">ETA: --</span>
-</div>
-<div class="status" id="sendFileCount"></div>
-<button class="btn btn-danger" onclick="cancelTransfer()">Cancel</button>
-</div>
-</div>
+    <!-- VIEW 2: SENDER CODE & QR -->
+    <div id="view-send" class="hidden">
+      <div class="view-header">
+        <button class="back-btn" onclick="cancelAndReset()">&#8249;</button>
+        <span class="header-title">SEND: SHARE CODE</span>
+      </div>
+      <div class="code-display-box">
+        <span id="display-code">------</span>
+      </div>
+      <div class="qr-wrapper">
+        <div id="qrcode"></div>
+      </div>
+      <div id="send-queue-preview" class="queue-list"></div>
+      <button class="action-btn-outline" onclick="copyShareLink()">Copy Link</button>
+      <button class="cancel-btn" onclick="cancelAndReset()">Cancel Transfer</button>
+    </div>
 
-<!-- RECEIVE PANEL -->
-<div class="panel" id="receivePanel">
-<div id="receiveSetup">
-<div class="input-group">
-<input type="text" id="codeInput" placeholder="Enter 6-digit code" maxlength="6" inputmode="numeric">
-</div>
-<button class="btn btn-primary" onclick="startReceiving()">Connect & Receive</button>
-<div class="status" id="receiveStatus"></div>
-</div>
-<div class="progress-section" id="receiveProgress">
-<div class="file-info">
-<span class="file-name" id="recvFileName">-</span>
-<span class="file-size" id="recvFileSize">-</span>
-</div>
-<div class="progress-bar-container"><div class="progress-bar" id="recvBar"></div></div>
-<div class="stats">
-<span id="recvPercent">0%</span>
-<span id="recvSpeed">0 MB/s</span>
-<span id="recvETA">ETA: --</span>
-</div>
-<div class="status" id="recvFileCount"></div>
-<button class="btn btn-danger" onclick="cancelTransfer()">Cancel</button>
-</div>
-</div>
-</div>
+    <!-- VIEW 3: RECEIVER CODE INPUT -->
+    <div id="view-receive" class="hidden">
+      <div class="view-header">
+        <button class="back-btn" onclick="cancelAndReset()">&#8249;</button>
+        <span class="header-title">RECEIVE: ENTER CODE</span>
+      </div>
+      <p class="input-instruction">ENTER 6-DIGIT CODE</p>
+      <div class="otp-container">
+        <input type="text" maxlength="1" class="otp-input" inputmode="numeric">
+        <input type="text" maxlength="1" class="otp-input" inputmode="numeric">
+        <input type="text" maxlength="1" class="otp-input" inputmode="numeric">
+        <input type="text" maxlength="1" class="otp-input" inputmode="numeric">
+        <input type="text" maxlength="1" class="otp-input" inputmode="numeric">
+        <input type="text" maxlength="1" class="otp-input" inputmode="numeric">
+      </div>
+      <button id="btn-connect" class="primary-btn" onclick="connectWithCode()" disabled>Connect & Receive</button>
+      <button class="cancel-btn" onclick="cancelAndReset()">Cancel</button>
+    </div>
 
-<script>
-// ===== CONFIGURATION FOR MAX SPEED =====
-const CHUNK_SIZE = 256 * 1024; // 256KB chunks - optimal balance
-const BUFFER_HIGH = 4 * 1024 * 1024; // 4MB buffer threshold
-const BUFFER_LOW = 1 * 1024 * 1024; // Resume at 1MB
-const PROGRESS_INTERVAL = 200; // Update UI every 200ms
+    <!-- VIEW 4: TRANSFER HUD -->
+    <div id="view-transfer" class="hidden">
+      <div class="view-header">
+        <span id="transfer-screen-title" class="header-title">TRANSFERRING</span>
+      </div>
+      <div id="transfer-icon-area">
+        <div class="file-meta-card">
+          <div class="file-icon-box">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+              <polyline points="13 2 13 9 20 9"></polyline>
+            </svg>
+          </div>
+          <div class="file-info-col">
+            <div id="meta-filename" class="file-name-text">filename.ext</div>
+            <div id="meta-filesize" class="file-size-text">0 MB</div>
+          </div>
+          <div id="meta-batch-pill" class="batch-pill hidden">1 / 1</div>
+        </div>
+      </div>
 
-let peer = null;
-let conn = null;
-let files = [];
-let currentFileIndex = 0;
-let transferring = false;
-let cancelled = false;
-let lastProgressTime = 0;
-let lastBytes = 0;
+      <!-- Completion Box -->
+      <div id="completion-box" class="hidden">
+        <div class="success-badge">
+          <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"></polyline>
+          </svg>
+        </div>
+        <h2 id="completion-title" style="font-size: 20px; font-weight: 700; margin-bottom: 6px;">Transfer Complete!</h2>
+        <p id="completion-sub" style="font-size: 13px; color: #8b9bb4; margin-bottom: 20px;">File saved directly to your device.</p>
+      </div>
 
-// ===== TAB SWITCHING =====
-function switchTab(tab) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-  document.querySelector(`.tab.${tab}`).classList.add('active');
-  document.getElementById(`${tab}Panel`).classList.add('active');
-}
+      <!-- Live Speed HUD -->
+      <div class="transfer-hud">
+        <div class="progress-bar-bg">
+          <div id="progress-bar-fill"></div>
+        </div>
+        <div class="progress-info">
+          <span id="transfer-status">Connecting...</span>
+          <span id="transfer-percentage">0%</span>
+        </div>
+        <div class="speed-info">
+          <span id="transfer-speed">0.0 MB/s</span>
+          <span id="transfer-eta">ETA: calculating...</span>
+        </div>
+      </div>
 
-// ===== FILE SELECTION =====
-const fileDrop = document.getElementById('fileDrop');
-const fileInput = document.getElementById('fileInput');
+      <div id="transfer-actions">
+        <button id="btn-cancel-transfer" class="cancel-btn" style="margin-top: 4px;" onclick="cancelAndReset()">Cancel</button>
+      </div>
+      <div id="completion-actions" class="hidden">
+        <button id="btn-send-more" class="primary-btn hidden" onclick="sendMoreFiles()">Send More Files</button>
+        <button class="secondary-btn" style="margin-bottom: 0;" onclick="cancelAndReset()">Done</button>
+      </div>
+    </div>
+  </div>
 
-fileDrop.addEventListener('dragover', e => { e.preventDefault(); fileDrop.classList.add('dragover'); });
-fileDrop.addEventListener('dragleave', () => fileDrop.classList.remove('dragover'));
-fileDrop.addEventListener('drop', e => {
-  e.preventDefault();
-  fileDrop.classList.remove('dragover');
-  addFiles(e.dataTransfer.files);
-});
-fileInput.addEventListener('change', () => addFiles(fileInput.files));
+  <script>
+    const PEER_CONFIG = {
+      debug: 1,
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+          { urls: 'stun:stun3.l.google.com:19302' },
+          { urls: 'stun:stun4.l.google.com:19302' },
+          { urls: 'stun:stun.services.mozilla.com' }
+        ]
+      }
+    };
 
-function addFiles(fileListObj) {
-  for (let f of fileListObj) files.push(f);
-  renderFileList();
-  document.getElementById('startSendBtn').style.display = files.length ? 'block' : 'none';
-}
+    // Tuned chunk size and buffer limits for optimal throughput and zero memory lockups
+    const CHUNK_SIZE = 64000;            // 62.5 KB safe SCTP size
+    const HIGH_WATER_MARK = 2 * 1024 * 1024; // 2 MB pipeline buffer
+    const LOW_WATER_MARK = 512 * 1024;       // 512 KB resume threshold
 
-function renderFileList() {
-  const el = document.getElementById('fileList');
-  el.innerHTML = files.map((f, i) => `
-    <div class="file-item">
-      <span>${f.name} (${formatSize(f.size)})</span>
-      <span class="remove" onclick="removeFile(${i})">✕</span>
-    </div>`).join('');
-}
+    let peer = null;
+    let conn = null;
+    let isCancelled = false;
+    let isSender = false;
+    let wakeLock = null;
+    let sessionCode = null;
 
-function removeFile(i) {
-  files.splice(i, 1);
-  renderFileList();
-  document.getElementById('startSendBtn').style.display = files.length ? 'block' : 'none';
-}
+    let fileQueue = [];
+    let currentFileIndex = 0;
+    let currentBatchTotal = 0;
 
-// ===== SENDER =====
-function startSending() {
-  if (!files.length) return;
-  setStatus('sendStatus', '<span class="spinner"></span>Creating room...');
-  
-  const code = generateCode();
-  peer = new Peer('sendly-' + code, {
-    debug: 0,
-    config: {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' }
-      ]
-    }
-  });
+    // Receiver state
+    let receiverMeta = null;
+    let receiverChunks = [];
+    let receiverBytes = 0;
+    let receiverBatchCount = 1;
+    let receiverBatchIndex = 0;
+    let lastSyncSendTime = 0;
 
-  peer.on('open', () => {
-    setStatus('sendStatus', `<div class="code-display">${code}</div><button class="copy-btn" onclick="copyCode('${code}')">📋 Copy Code</button><p style="color:#888;margin-top:10px;font-size:0.85rem">Share this code with the receiver</p>`);
-  });
+    // Sender file wait resolver
+    let fileAckResolver = null;
 
-  peer.on('connection', c => {
-    conn = c;
-    setupConnection();
-    conn.on('open', () => {
-      document.getElementById('sendSetup').style.display = 'none';
-      document.getElementById('sendProgress').style.display = 'block';
-      transferring = true;
-      cancelled = false;
-      sendFiles();
-    });
-  });
+    // Cached DOM Elements
+    let els = {};
 
-  peer.on('error', err => {
-    if (err.type === 'unavailable-id') {
-      peer.destroy();
-      startSending();
-    } else {
-      setStatus('sendStatus', 'Error: ' + err.type, true);
-    }
-  });
-}
-
-function sendFiles() {
-  currentFileIndex = 0;
-  sendNextFile();
-}
-
-function sendNextFile() {
-  if (cancelled || currentFileIndex >= files.length) {
-    if (!cancelled) {
-      conn.send({ type: 'complete' });
-      setStatus('sendStatus', 'Transfer Complete!', false, true);
-      setTimeout(() => location.reload(), 3000);
-    }
-    return;
-  }
-
-  const file = files[currentFileIndex];
-  document.getElementById('sendFileName').textContent = file.name;
-  document.getElementById('sendFileSize').textContent = formatSize(file.size);
-  document.getElementById('sendFileCount').textContent = `File ${currentFileIndex + 1} / ${files.length}`;
-
-  // Send file metadata
-  conn.send({
-    type: 'file-meta',
-    name: file.name,
-    size: file.size,
-    mime: file.type || 'application/octet-stream',
-    index: currentFileIndex,
-    total: files.length
-  });
-
-  // Read and send file in chunks
-  const reader = new FileReader();
-  reader.onload = () => {
-    const buffer = reader.result;
-    sendChunks(buffer, file.size);
-  };
-  reader.readAsArrayBuffer(file);
-}
-
-function sendChunks(buffer, totalSize) {
-  let offset = 0;
-  let lastSent = Date.now();
-  let sentBytes = 0;
-
-  function sendNext() {
-    if (cancelled) return;
-
-    // Backpressure: wait if buffer is too full
-    if (conn.dataChannel && conn.dataChannel.bufferedAmount > BUFFER_HIGH) {
-      setTimeout(sendNext, 10);
-      return;
+    function initDomElements() {
+      els = {
+        toast: document.getElementById('toast'),
+        viewHome: document.getElementById('view-home'),
+        viewSend: document.getElementById('view-send'),
+        viewReceive: document.getElementById('view-receive'),
+        viewTransfer: document.getElementById('view-transfer'),
+        displayCode: document.getElementById('display-code'),
+        qrcode: document.getElementById('qrcode'),
+        sendQueuePreview: document.getElementById('send-queue-preview'),
+        btnConnect: document.getElementById('btn-connect'),
+        transferScreenTitle: document.getElementById('transfer-screen-title'),
+        metaFilename: document.getElementById('meta-filename'),
+        metaFilesize: document.getElementById('meta-filesize'),
+        metaBatchPill: document.getElementById('meta-batch-pill'),
+        transferIconArea: document.getElementById('transfer-icon-area'),
+        completionBox: document.getElementById('completion-box'),
+        completionTitle: document.getElementById('completion-title'),
+        completionSub: document.getElementById('completion-sub'),
+        transferActions: document.getElementById('transfer-actions'),
+        completionActions: document.getElementById('completion-actions'),
+        btnSendMore: document.getElementById('btn-send-more'),
+        progressBarFill: document.getElementById('progress-bar-fill'),
+        transferStatus: document.getElementById('transfer-status'),
+        transferPercentage: document.getElementById('transfer-percentage'),
+        transferSpeed: document.getElementById('transfer-speed'),
+        transferEta: document.getElementById('transfer-eta'),
+        hiddenFileInput: document.getElementById('hidden-file-input')
+      };
     }
 
-    // Send multiple chunks per tick for speed
-    let chunksThisTick = 0;
-    while (offset < totalSize && chunksThisTick < 4) {
-      if (cancelled) return;
-      
-      const end = Math.min(offset + CHUNK_SIZE, totalSize);
-      const chunk = buffer.slice(offset, end);
-      
-      conn.send({ type: 'chunk', data: chunk });
-      
-      offset = end;
-      sentBytes = offset;
-      chunksThisTick++;
+    // High precision rolling speed meter with exponential smoothing
+    let speedSamples = [];
+    let smoothedSpeed = 0;
 
-      // Check backpressure after each chunk
-      if (conn.dataChannel && conn.dataChannel.bufferedAmount > BUFFER_HIGH) {
-        setTimeout(sendNext, 5);
+    function resetSpeedMeter() {
+      speedSamples = [];
+      smoothedSpeed = 0;
+    }
+
+    function calculateSpeed(currentTransferred) {
+      const now = performance.now();
+      speedSamples.push({ t: now, b: currentTransferred });
+
+      while (speedSamples.length > 2 && now - speedSamples[0].t > 1000) {
+        speedSamples.shift();
+      }
+
+      if (speedSamples.length < 2) return smoothedSpeed;
+
+      const dt = (speedSamples[speedSamples.length - 1].t - speedSamples[0].t) / 1000;
+      const db = speedSamples[speedSamples.length - 1].b - speedSamples[0].b;
+      const currentRate = dt > 0 ? db / dt : 0;
+
+      smoothedSpeed = smoothedSpeed === 0 ? currentRate : (smoothedSpeed * 0.75 + currentRate * 0.25);
+      return smoothedSpeed;
+    }
+
+    function formatSpeedString(bytesPerSec) {
+      if (!bytesPerSec || bytesPerSec <= 0) return '0.0 MB/s';
+      if (bytesPerSec >= 1024 * 1024) {
+        return (bytesPerSec / (1024 * 1024)).toFixed(1) + ' MB/s';
+      }
+      if (bytesPerSec >= 1024) {
+        return (bytesPerSec / 1024).toFixed(0) + ' KB/s';
+      }
+      return formatBytes(bytesPerSec) + '/s';
+    }
+
+    function formatEtaString(seconds) {
+      if (seconds === null || !isFinite(seconds) || seconds < 0) return 'ETA: calculating...';
+      if (seconds < 60) return `ETA: ~${Math.max(1, Math.ceil(seconds))}s`;
+      return `ETA: ~${Math.ceil(seconds / 60)}m`;
+    }
+
+    // 60FPS UI Rendering Loop
+    let uiState = {
+      transferred: 0,
+      total: 0,
+      status: 'Connecting...',
+      isComplete: false,
+      speedText: '0.0 MB/s',
+      etaText: 'ETA: calculating...',
+      dirty: false
+    };
+    let rafId = null;
+
+    function scheduleUiUpdate() {
+      uiState.dirty = true;
+      if (!rafId) {
+        rafId = requestAnimationFrame(renderUi);
+      }
+    }
+
+    function renderUi() {
+      rafId = null;
+      if (!uiState.dirty) return;
+      uiState.dirty = false;
+
+      const total = uiState.total;
+      const transferred = uiState.transferred;
+      const pct = total > 0 ? Math.min(100, (transferred / total) * 100) : 0;
+
+      if (els.progressBarFill) {
+        els.progressBarFill.style.transform = `scaleX(${uiState.isComplete ? 1 : (pct / 100).toFixed(4)})`;
+      }
+      if (els.transferPercentage) {
+        els.transferPercentage.textContent = Math.floor(pct) + '%';
+      }
+      if (els.transferStatus) {
+        els.transferStatus.textContent = uiState.status;
+      }
+      if (els.transferSpeed) {
+        els.transferSpeed.textContent = uiState.isComplete ? 'Completed' : uiState.speedText;
+      }
+      if (els.transferEta) {
+        els.transferEta.textContent = uiState.isComplete ? '' : uiState.etaText;
+      }
+    }
+
+    async function requestWakeLock() {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLock = await navigator.wakeLock.request('screen');
+        }
+      } catch (_) {}
+    }
+
+    function releaseWakeLock() {
+      if (wakeLock) {
+        try { wakeLock.release(); } catch (_) {}
+        wakeLock = null;
+      }
+    }
+
+    function showToast(message) {
+      if (!els.toast) return;
+      els.toast.textContent = message;
+      els.toast.classList.add('show');
+      clearTimeout(showToast._timer);
+      showToast._timer = setTimeout(() => {
+        if (els.toast) els.toast.classList.remove('show');
+      }, 2600);
+    }
+
+    function generateSixDigitCode() {
+      return Math.floor(100000 + Math.random() * 900000).toString();
+    }
+
+    function formatBytes(bytes) {
+      if (!bytes || bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
+      return (bytes / Math.pow(k, i)).toFixed(i === 0 ? 0 : 1) + ' ' + sizes[i];
+    }
+
+    function showView(viewId) {
+      ['view-home', 'view-send', 'view-receive', 'view-transfer'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.add('hidden');
+      });
+      const target = document.getElementById(viewId);
+      if (target) target.classList.remove('hidden');
+    }
+
+    function cancelAndReset() {
+      isCancelled = true;
+      releaseWakeLock();
+
+      if (fileAckResolver) {
+        fileAckResolver();
+        fileAckResolver = null;
+      }
+
+      if (conn && conn.open) {
+        try { conn.send(JSON.stringify({ type: 'TRANSFER_CANCEL' })); } catch (_) {}
+      }
+      if (conn) {
+        try { conn.close(); } catch (_) {}
+        conn = null;
+      }
+      if (peer) {
+        try { peer.destroy(); } catch (_) {}
+        peer = null;
+      }
+
+      fileQueue = [];
+      currentFileIndex = 0;
+      currentBatchTotal = 0;
+      receiverMeta = null;
+      receiverChunks = [];
+      receiverBytes = 0;
+      sessionCode = null;
+      isSender = false;
+      resetSpeedMeter();
+
+      if (els.hiddenFileInput) els.hiddenFileInput.value = '';
+
+      const btn = els.btnConnect || document.getElementById('btn-connect');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Connect & Receive';
+      }
+
+      showView('view-home');
+    }
+
+    function sendMoreFiles() {
+      if (!conn || !conn.open) {
+        showToast('Connection closed. Please start a new transfer.');
+        cancelAndReset();
         return;
       }
-    }
-
-    // Update progress
-    updateSendProgress(sentBytes, totalSize);
-
-    if (offset < totalSize) {
-      // Use setTimeout(0) to keep UI responsive
-      if (conn.dataChannel && conn.dataChannel.bufferedAmount > BUFFER_LOW) {
-        setTimeout(sendNext, 5);
-      } else {
-        setTimeout(sendNext, 0);
+      isCancelled = false;
+      if (els.hiddenFileInput) {
+        els.hiddenFileInput.value = '';
+        els.hiddenFileInput.click();
       }
-    } else {
-      // File complete
-      conn.send({ type: 'file-end', index: currentFileIndex });
+    }
+
+    function openReceiveView() {
+      isSender = false;
+      showView('view-receive');
+      setupOtpInputs();
+      if (!peer || peer.destroyed) initReceiverPeer();
+    }
+
+    function copyShareLink() {
+      const code = sessionCode || (els.displayCode ? els.displayCode.textContent : '');
+      const shareUrl = `${window.location.origin}${window.location.pathname}?code=${code}`;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(shareUrl).then(() => {
+          showToast('Link copied to clipboard!');
+        }).catch(() => fallbackCopy(shareUrl));
+      } else {
+        fallbackCopy(shareUrl);
+      }
+    }
+
+    function fallbackCopy(text) {
+      const el = document.createElement('textarea');
+      el.value = text;
+      el.style.position = 'fixed';
+      el.style.opacity = '0';
+      document.body.appendChild(el);
+      el.select();
+      try {
+        document.execCommand('copy');
+        showToast('Link copied to clipboard!');
+      } catch (_) {
+        showToast('Copy link: ' + text);
+      }
+      document.body.removeChild(el);
+    }
+
+    function setupOtpInputs() {
+      const inputs = document.querySelectorAll('.otp-input');
+      inputs.forEach((input, idx) => {
+        input.value = '';
+        input.oninput = (e) => {
+          e.target.value = e.target.value.replace(/\D/g, '').slice(0, 1);
+          if (e.target.value && idx < inputs.length - 1) inputs[idx + 1].focus();
+          checkOtpFilled();
+        };
+        input.onkeydown = (e) => {
+          if (e.key === 'Backspace' && !e.target.value && idx > 0) {
+            inputs[idx - 1].focus();
+          }
+        };
+        input.onpaste = (e) => {
+          e.preventDefault();
+          const pasted = (e.clipboardData || window.clipboardData).getData('text').replace(/\D/g, '').slice(0, 6);
+          pasted.split('').forEach((digit, i) => {
+            if (inputs[i]) inputs[i].value = digit;
+          });
+          checkOtpFilled();
+          if (pasted.length === 6) inputs[5].focus();
+        };
+      });
+      setTimeout(() => inputs[0] && inputs[0].focus(), 150);
+    }
+
+    function checkOtpFilled() {
+      const inputs = document.querySelectorAll('.otp-input');
+      let fullCode = '';
+      inputs.forEach(i => fullCode += i.value);
+      if (els.btnConnect) {
+        els.btnConnect.disabled = fullCode.length !== 6;
+      }
+    }
+
+    function initTransferView(title, statusText, fileName, fileSize, batchIdx, batchTotal) {
+      showView('view-transfer');
+      if (els.transferScreenTitle) els.transferScreenTitle.textContent = title;
+      if (els.metaFilename) els.metaFilename.textContent = fileName || 'Connecting...';
+      if (els.metaFilesize) els.metaFilesize.textContent = formatBytes(fileSize || 0);
+
+      if (els.metaBatchPill) {
+        if (batchTotal && batchTotal > 1) {
+          els.metaBatchPill.textContent = `${batchIdx} / ${batchTotal}`;
+          els.metaBatchPill.classList.remove('hidden');
+        } else {
+          els.metaBatchPill.classList.add('hidden');
+        }
+      }
+
+      if (els.transferIconArea) els.transferIconArea.classList.remove('hidden');
+      if (els.completionBox) els.completionBox.classList.add('hidden');
+      if (els.transferActions) els.transferActions.classList.remove('hidden');
+      if (els.completionActions) els.completionActions.classList.add('hidden');
+
+      uiState.status = statusText;
+      uiState.transferred = 0;
+      uiState.total = fileSize || 0;
+      uiState.isComplete = false;
+      uiState.speedText = '0.0 MB/s';
+      uiState.etaText = 'ETA: calculating...';
+
+      resetSpeedMeter();
+      scheduleUiUpdate();
+      requestWakeLock();
+    }
+
+    function showBatchComplete(count, roleIsSender) {
+      uiState.isComplete = true;
+      uiState.status = 'Delivered';
+      scheduleUiUpdate();
+      releaseWakeLock();
+
+      try {
+        if (navigator.vibrate) navigator.vibrate([120, 60, 120]);
+      } catch (_) {}
+
+      if (els.transferIconArea) els.transferIconArea.classList.add('hidden');
+      if (els.completionBox) els.completionBox.classList.remove('hidden');
+      if (els.transferActions) els.transferActions.classList.add('hidden');
+      if (els.completionActions) els.completionActions.classList.remove('hidden');
+
+      if (els.completionTitle) {
+        els.completionTitle.textContent = count > 1 ? `${count} Files Sent!` : 'Transfer Complete!';
+      }
+      if (els.completionSub) {
+        els.completionSub.textContent = roleIsSender ? 'Delivered to receiver.' : 'Saved directly to your device.';
+      }
+      if (els.btnSendMore) {
+        if (roleIsSender) {
+          els.btnSendMore.classList.remove('hidden');
+        } else {
+          els.btnSendMore.classList.add('hidden');
+        }
+      }
+    }
+
+    function renderSendQueuePreview() {
+      if (!els.sendQueuePreview) return;
+      if (!fileQueue.length) {
+        els.sendQueuePreview.innerHTML = '';
+        return;
+      }
+      els.sendQueuePreview.innerHTML = fileQueue.map(f =>
+        `<div class="queue-item"><span class="queue-item-name">${escapeHtml(f.name)}</span><span class="queue-item-size">${formatBytes(f.size)}</span></div>`
+      ).join('');
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    // SENDER PIPELINE
+    function onFilesPicked(event) {
+      const files = event.target.files ? Array.from(event.target.files) : [];
+      if (!files.length) return;
+
+      isCancelled = false;
+
+      if (conn && conn.open) {
+        fileQueue = files;
+        currentBatchTotal = files.length;
+        currentFileIndex = 0;
+        beginNextFileInQueue();
+        return;
+      }
+
+      isSender = true;
+      fileQueue = files;
+      currentBatchTotal = files.length;
+      currentFileIndex = 0;
+
+      const code = generateSixDigitCode();
+      const peerId = 'sendly-' + code;
+      sessionCode = code;
+
+      if (peer) {
+        try { peer.destroy(); } catch (_) {}
+      }
+
+      peer = new Peer(peerId, PEER_CONFIG);
+
+      peer.on('error', (err) => {
+        console.error('Peer error:', err);
+        if (err && err.type === 'unavailable-id') {
+          onFilesPicked({ target: { files } });
+          return;
+        }
+        showToast('Network notice: ' + (err.type || 'connection interrupted'));
+      });
+
+      peer.on('open', () => {
+        if (els.displayCode) els.displayCode.textContent = code;
+        renderSendQueuePreview();
+        showView('view-send');
+
+        if (els.qrcode) {
+          els.qrcode.innerHTML = '';
+          if (window.QRCode) {
+            const shareUrl = `${window.location.origin}${window.location.pathname}?code=${code}`;
+            new QRCode(els.qrcode, {
+              text: shareUrl,
+              width: 160,
+              height: 160,
+              colorDark: '#000000',
+              colorLight: '#ffffff'
+            });
+          }
+        }
+      });
+
+      peer.on('connection', (c) => {
+        if (conn && conn !== c) {
+          try { c.close(); } catch (_) {}
+          return;
+        }
+        conn = c;
+        // Enforce raw binary mode for zero serialization lag
+        conn.serialization = 'none';
+        bindSenderEvents(conn);
+      });
+    }
+
+    function bindSenderEvents(c) {
+      c.on('data', (data) => {
+        if (typeof data !== 'string') return;
+        let msg;
+        try { msg = JSON.parse(data); } catch (_) { return; }
+
+        // Perfect lockstep telemetry from receiver
+        if (msg.type === 'SYNC') {
+          uiState.transferred = msg.b;
+          uiState.speedText = msg.s;
+          uiState.etaText = msg.eta;
+          scheduleUiUpdate();
+          return;
+        }
+
+        if (msg.type === 'FILE_ACK') {
+          if (fileAckResolver) {
+            fileAckResolver();
+            fileAckResolver = null;
+          }
+          return;
+        }
+
+        if (msg.type === 'TRANSFER_CANCEL') {
+          showToast('Receiver cancelled transfer.');
+          cancelAndReset();
+        }
+      });
+
+      c.on('open', () => {
+        if (isCancelled) return;
+        beginNextFileInQueue();
+      });
+
+      c.on('close', () => {
+        if (!isCancelled) {
+          showToast('Connection closed.');
+          cancelAndReset();
+        }
+      });
+
+      c.on('error', () => {
+        if (!isCancelled) {
+          showToast('Transfer interrupted.');
+          cancelAndReset();
+        }
+      });
+    }
+
+    async function beginNextFileInQueue() {
+      if (isCancelled || !conn) return;
+
+      if (!conn.open) {
+        await new Promise((resolve) => conn.once('open', resolve));
+      }
+
+      if (currentFileIndex === 0) {
+        try {
+          conn.send(JSON.stringify({ type: 'BATCH_META', count: currentBatchTotal }));
+        } catch (_) {}
+      }
+
+      if (currentFileIndex >= fileQueue.length) {
+        showBatchComplete(currentBatchTotal, true);
+        return;
+      }
+
+      const file = fileQueue[currentFileIndex];
+
+      initTransferView(
+        'SENDING FILE',
+        'Sending file...',
+        file.name,
+        file.size,
+        currentFileIndex + 1,
+        currentBatchTotal
+      );
+
+      try {
+        await sendSingleFile(file);
+      } catch (err) {
+        console.error('Send error:', err);
+        if (!isCancelled) {
+          uiState.status = 'Transfer error.';
+          scheduleUiUpdate();
+          showToast('Failed to send ' + file.name);
+          return;
+        }
+      }
+
+      if (isCancelled) return;
       currentFileIndex++;
-      setTimeout(sendNextFile, 100);
+      beginNextFileInQueue();
     }
-  }
 
-  sendNext();
-}
+    async function sendSingleFile(file) {
+      if (!conn || !conn.open) return;
 
-function updateSendProgress(sent, total) {
-  const now = Date.now();
-  if (now - lastProgressTime < PROGRESS_INTERVAL) return;
-  
-  const percent = ((sent / total) * 100).toFixed(1);
-  const elapsed = (now - lastProgressTime) / 1000;
-  const speed = elapsed > 0 ? (sent - lastBytes) / elapsed : 0;
-  const remaining = speed > 0 ? (total - sent) / speed : 0;
+      const dc = conn.dataChannel || conn._dc;
+      if (dc) {
+        try {
+          dc.bufferedAmountLowThreshold = LOW_WATER_MARK;
+        } catch (_) {}
+      }
 
-  document.getElementById('sendBar').style.width = percent + '%';
-  document.getElementById('sendPercent').textContent = percent + '%';
-  document.getElementById('sendSpeed').textContent = formatSpeed(speed);
-  document.getElementById('sendETA').textContent = 'ETA: ' + formatETA(remaining);
+      function waitForDrain() {
+        if (!dc || dc.bufferedAmount <= LOW_WATER_MARK) return Promise.resolve();
+        return new Promise((resolve) => {
+          let timer = null;
+          let settled = false;
 
-  lastProgressTime = now;
-  lastBytes = sent;
-}
+          function onLow() {
+            if (settled) return;
+            settled = true;
+            if (timer) clearInterval(timer);
+            if (dc) dc.removeEventListener('bufferedamountlow', onLow);
+            resolve();
+          }
 
-// ===== RECEIVER =====
-function startReceiving() {
-  const code = document.getElementById('codeInput').value.trim();
-  if (code.length !== 6) {
-    setStatus('receiveStatus', 'Please enter a 6-digit code', true);
-    return;
-  }
+          if (dc) {
+            dc.addEventListener('bufferedamountlow', onLow, { once: true });
+          }
 
-  setStatus('receiveStatus', '<span class="spinner"></span>Connecting...');
-  
-  peer = new Peer(undefined, {
-    debug: 0,
-    config: {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' }
-      ]
+          // Safety polling check to prevent freezes if event was dropped
+          timer = setInterval(() => {
+            if (!dc || dc.bufferedAmount <= LOW_WATER_MARK || isCancelled || !conn || !conn.open) {
+              onLow();
+            }
+          }, 15);
+        });
+      }
+
+      // Step 1: Send Header
+      conn.send(JSON.stringify({
+        type: 'FILE_START',
+        name: file.name,
+        size: file.size,
+        mime: file.type || 'application/octet-stream'
+      }));
+
+      let offset = 0;
+
+      // Step 2: High speed streaming with backpressure
+      while (offset < file.size) {
+        if (isCancelled || !conn || !conn.open) break;
+
+        if (dc && dc.bufferedAmount >= HIGH_WATER_MARK) {
+          await waitForDrain();
+          if (isCancelled || !conn || !conn.open) break;
+        }
+
+        const end = Math.min(offset + CHUNK_SIZE, file.size);
+        const slice = file.slice(offset, end);
+        const buffer = await slice.arrayBuffer();
+
+        if (isCancelled || !conn || !conn.open) break;
+
+        conn.send(buffer);
+        offset = end;
+      }
+
+      // Step 3: Wait for socket buffer drain with timeout guard
+      const drainStart = performance.now();
+      while (dc && dc.bufferedAmount > 0 && !isCancelled && conn && conn.open) {
+        if (performance.now() - drainStart > 8000) break;
+        await new Promise((r) => setTimeout(r, 15));
+      }
+
+      if (isCancelled || !conn || !conn.open) return;
+
+      // Step 4: Send completion header and wait for receiver confirmation
+      conn.send(JSON.stringify({ type: 'FILE_END' }));
+
+      await new Promise((resolve) => {
+        fileAckResolver = resolve;
+        setTimeout(resolve, 10000); // 10s fallback guard
+      });
     }
-  });
 
-  peer.on('open', () => {
-    conn = peer.connect('sendly-' + code, { reliable: true });
-    setupConnection();
-    
-    conn.on('open', () => {
-      document.getElementById('receiveSetup').style.display = 'none';
-      document.getElementById('receiveProgress').style.display = 'block';
-      transferring = true;
-      cancelled = false;
-      setStatus('receiveStatus', 'Connected! Waiting for files...');
+    // RECEIVER PIPELINE
+    function initReceiverPeer() {
+      if (peer && !peer.destroyed) return;
+      peer = new Peer(PEER_CONFIG);
+
+      peer.on('error', (err) => {
+        console.error('Receiver peer error:', err);
+        const msg = err.type === 'peer-unavailable'
+          ? 'Device not found. Check code and try again.'
+          : 'Connection notice: ' + (err.type || 'check internet');
+        showToast(msg);
+        resetReceiverButton();
+      });
+    }
+
+    function resetReceiverButton() {
+      const btn = els.btnConnect || document.getElementById('btn-connect');
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Connect & Receive';
+      }
+    }
+
+    async function connectWithCode(customCode = null) {
+      let targetCode = customCode;
+      if (!targetCode) {
+        const inputs = document.querySelectorAll('.otp-input');
+        targetCode = '';
+        inputs.forEach(i => targetCode += i.value);
+      }
+      if (!/^\d{6}$/.test(targetCode)) return;
+
+      isCancelled = false;
+      isSender = false;
+      sessionCode = targetCode;
+
+      const targetPeerId = 'sendly-' + targetCode;
+      const btn = els.btnConnect || document.getElementById('btn-connect');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Connecting...';
+      }
+
+      if (!peer || peer.destroyed) {
+        initReceiverPeer();
+      }
+
+      const startConnection = () => {
+        try {
+          conn = peer.connect(targetPeerId, {
+            reliable: true,
+            serialization: 'none' // Raw binary mode
+          });
+          bindReceiverEvents(conn);
+        } catch (err) {
+          console.error('Connect failed:', err);
+          showToast('Connection failed. Please retry.');
+          resetReceiverButton();
+        }
+      };
+
+      if (peer && peer.open) {
+        startConnection();
+      } else if (peer) {
+        peer.once('open', startConnection);
+        peer.once('error', resetReceiverButton);
+      }
+    }
+
+    function bindReceiverEvents(c) {
+      c.on('open', () => {
+        if (isCancelled) return;
+      });
+
+      c.on('data', (data) => {
+        if (isCancelled) return;
+
+        // Message Header Handler
+        if (typeof data === 'string') {
+          let msg;
+          try { msg = JSON.parse(data); } catch (_) { return; }
+
+          if (msg.type === 'BATCH_META') {
+            receiverBatchCount = msg.count || 1;
+            receiverBatchIndex = 0;
+            return;
+          }
+
+          if (msg.type === 'FILE_START') {
+            receiverBatchIndex++;
+            receiverMeta = {
+              name: (msg.name || 'file').replace(/[/\\:*?"<>|]/g, '_').slice(0, 255),
+              size: msg.size || 0,
+              mime: msg.mime || 'application/octet-stream'
+            };
+            receiverChunks = [];
+            receiverBytes = 0;
+            lastSyncSendTime = 0;
+            resetSpeedMeter();
+
+            initTransferView(
+              'RECEIVING FILE',
+              'Receiving file...',
+              receiverMeta.name,
+              receiverMeta.size,
+              receiverBatchIndex,
+              receiverBatchCount
+            );
+            return;
+          }
+
+          if (msg.type === 'FILE_END' && receiverMeta) {
+            uiState.isComplete = true;
+            uiState.transferred = receiverMeta.size;
+            uiState.status = 'Delivered';
+            scheduleUiUpdate();
+
+            // Send final 100% sync tick and file complete ACK
+            try {
+              c.send(JSON.stringify({
+                type: 'SYNC',
+                b: receiverMeta.size,
+                s: 'Completed',
+                eta: ''
+              }));
+              c.send(JSON.stringify({ type: 'FILE_ACK' }));
+            } catch (_) {}
+
+            // Save file directly to device
+            const blob = new Blob(receiverChunks, { type: receiverMeta.mime });
+            receiverChunks = []; // Clean memory immediately
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = receiverMeta.name;
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 15000);
+
+            const isBatchFinished = receiverBatchIndex >= receiverBatchCount;
+            receiverMeta = null;
+
+            if (isBatchFinished) {
+              showBatchComplete(receiverBatchCount, false);
+            }
+            return;
+          }
+
+          if (msg.type === 'TRANSFER_CANCEL') {
+            showToast('Sender cancelled transfer.');
+            cancelAndReset();
+          }
+          return;
+        }
+
+        // Fast Raw Binary Chunk Ingestion
+        if (receiverMeta) {
+          receiverChunks.push(data);
+          receiverBytes += data.byteLength;
+
+          const now = performance.now();
+          // Throttle telemetry sync to sender (every 90ms or upon final chunk)
+          if (now - lastSyncSendTime >= 90 || receiverBytes === receiverMeta.size) {
+            lastSyncSendTime = now;
+            const spd = calculateSpeed(receiverBytes);
+            const spdStr = formatSpeedString(spd);
+
+            const remainingBytes = Math.max(0, receiverMeta.size - receiverBytes);
+            const remainingSecs = spd > 0 ? remainingBytes / spd : null;
+            const etaStr = formatEtaString(remainingSecs);
+
+            // Update local receiver UI state
+            uiState.transferred = receiverBytes;
+            uiState.speedText = spdStr;
+            uiState.etaText = etaStr;
+            scheduleUiUpdate();
+
+            // Transmit matching stats to sender
+            try {
+              c.send(JSON.stringify({
+                type: 'SYNC',
+                b: receiverBytes,
+                s: spdStr,
+                eta: etaStr
+              }));
+            } catch (_) {}
+          }
+        }
+      });
+
+      c.on('error', (err) => {
+        console.error('Connection error:', err);
+        showToast('Connection issue encountered.');
+        resetReceiverButton();
+      });
+
+      c.on('close', () => {
+        if (!isCancelled) {
+          showToast('Transfer session closed.');
+          cancelAndReset();
+        }
+      });
+    }
+
+    // Direct link autoconnect (?code=123456)
+    window.addEventListener('DOMContentLoaded', () => {
+      initDomElements();
+
+      const urlParams = new URLSearchParams(window.location.search);
+      const autoCode = (urlParams.get('code') || '').replace(/\D/g, '');
+      if (autoCode.length === 6) {
+        openReceiveView();
+        const inputs = document.querySelectorAll('.otp-input');
+        autoCode.split('').forEach((d, idx) => {
+          if (inputs[idx]) inputs[idx].value = d;
+        });
+        checkOtpFilled();
+        setTimeout(() => connectWithCode(autoCode), 150);
+      }
     });
 
-    conn.on('error', err => {
-      setStatus('receiveStatus', 'Connection error. Check the code.', true);
+    window.addEventListener('beforeunload', () => {
+      if (conn && conn.open) {
+        try { conn.send(JSON.stringify({ type: 'TRANSFER_CANCEL' })); } catch (_) {}
+      }
     });
-  });
-
-  peer.on('error', err => {
-    if (err.type === 'peer-unavailable') {
-      setStatus('receiveStatus', 'No sender found with that code', true);
-    } else {
-      setStatus('receiveStatus', 'Error: ' + err.type, true);
-    }
-  });
-
-  // Timeout
-  setTimeout(() => {
-    if (!transferring) {
-      setStatus('receiveStatus', 'Connection timed out', true);
-    }
-  }, 15000);
-}
-
-// ===== SHARED CONNECTION HANDLER =====
-let receivedChunks = [];
-let currentReceiveMeta = null;
-let receivedBytes = 0;
-let totalReceiveSize = 0;
-
-function setupConnection() {
-  conn.on('data', data => {
-    if (cancelled) return;
-
-    switch (data.type) {
-      case 'file-meta':
-        currentReceiveMeta = data;
-        receivedChunks = [];
-        receivedBytes = 0;
-        document.getElementById('recvFileName').textContent = data.name;
-        document.getElementById('recvFileSize').textContent = formatSize(data.size);
-        document.getElementById('recvFileCount').textContent = `File ${data.index + 1} / ${data.total}`;
-        lastProgressTime = Date.now();
-        lastBytes = 0;
-        break;
-
-      case 'chunk':
-        receivedChunks.push(data.data);
-        receivedBytes += data.data.byteLength;
-        updateReceiveProgress();
-        break;
-
-      case 'file-end':
-        saveFile();
-        break;
-
-      case 'complete':
-        setStatus('recvFileCount', 'All files received!', false, true);
-        setTimeout(() => location.reload(), 3000);
-        break;
-    }
-  });
-
-  conn.on('close', () => {
-    if (transferring && !cancelled) {
-      alert('Connection lost');
-      location.reload();
-    }
-  });
-}
-
-function updateReceiveProgress() {
-  const now = Date.now();
-  if (now - lastProgressTime < PROGRESS_INTERVAL) return;
-  if (!currentReceiveMeta) return;
-
-  const total = currentReceiveMeta.size;
-  const percent = ((receivedBytes / total) * 100).toFixed(1);
-  const elapsed = (now - lastProgressTime) / 1000;
-  const speed = elapsed > 0 ? (receivedBytes - lastBytes) / elapsed : 0;
-  const remaining = speed > 0 ? (total - receivedBytes) / speed : 0;
-
-  document.getElementById('recvBar').style.width = percent + '%';
-  document.getElementById('recvPercent').textContent = percent + '%';
-  document.getElementById('recvSpeed').textContent = formatSpeed(speed);
-  document.getElementById('recvETA').textContent = 'ETA: ' + formatETA(remaining);
-
-  lastProgressTime = now;
-  lastBytes = receivedBytes;
-}
-
-function saveFile() {
-  if (!currentReceiveMeta) return;
-  
-  const blob = new Blob(receivedChunks, { type: currentReceiveMeta.mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = currentReceiveMeta.name;
-  a.click();
-  URL.revokeObjectURL(url);
-  
-  receivedChunks = [];
-  currentReceiveMeta = null;
-}
-
-// ===== UTILITIES =====
-function generateCode() {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
-function copyCode(code) {
-  navigator.clipboard.writeText(code).then(() => {
-    const btn = document.querySelector('.copy-btn');
-    if (btn) btn.textContent = '✓ Copied!';
-    setTimeout(() => { if (btn) btn.textContent = '📋 Copy Code'; }, 2000);
-  });
-}
-
-function formatSize(bytes) {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
-}
-
-function formatSpeed(bytesPerSec) {
-  if (bytesPerSec === 0) return '0 MB/s';
-  const mbps = bytesPerSec / (1024 * 1024);
-  if (mbps >= 1) return mbps.toFixed(1) + ' MB/s';
-  return (bytesPerSec / 1024).toFixed(0) + ' KB/s';
-}
-
-function formatETA(seconds) {
-  if (!seconds || !isFinite(seconds)) return '--';
-  if (seconds < 60) return Math.ceil(seconds) + 's';
-  const m = Math.floor(seconds / 60);
-  const s = Math.ceil(seconds % 60);
-  return `${m}m ${s}s`;
-}
-
-function setStatus(id, html, isError = false, isSuccess = false) {
-  const el = document.getElementById(id);
-  el.innerHTML = html;
-  el.className = 'status' + (isError ? ' error' : '') + (isSuccess ? ' success' : '');
-}
-
-function cancelTransfer() {
-  cancelled = true;
-  transferring = false;
-  if (conn) conn.close();
-  if (peer) peer.destroy();
-  location.reload();
-}
-
-// Prevent page sleep during transfer
-let wakeLock = null;
-async function requestWakeLock() {
-  try {
-    if ('wakeLock' in navigator) {
-      wakeLock = await navigator.wakeLock.request('screen');
-    }
-  } catch (e) {}
-}
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && transferring) requestWakeLock();
-});
-</script>
+  </script>
 </body>
 </html>
