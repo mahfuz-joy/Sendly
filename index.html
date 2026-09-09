@@ -627,7 +627,7 @@
   </div>
 
   <script>
-    // Robust STUN servers for seamless WebRTC NAT/Hotspot discovery
+    // Robust STUN and TURN servers for reliable WebRTC connections
     const PEER_CONFIG = {
       config: {
         iceServers: [
@@ -639,23 +639,23 @@
           },
           {
             urls: 'turn:global.relay.metered.ca:80',
-            username: 'YOUR_USERNAME',
-            credential: 'YOUR_CREDENTIAL'
+            username: '62588f777bbaaf306ef3f17f',
+            credential: 'vCNtTXqhnEYquavX'
           },
           {
             urls: 'turn:global.relay.metered.ca:80?transport=tcp',
-            username: 'YOUR_USERNAME',
-            credential: 'YOUR_CREDENTIAL'
+            username: '62588f777bbaaf306ef3f17f',
+            credential: 'vCNtTXqhnEYquavX'
           },
           {
             urls: 'turn:global.relay.metered.ca:443',
-            username: 'YOUR_USERNAME',
-            credential: 'YOUR_CREDENTIAL'
+            username: '62588f777bbaaf306ef3f17f',
+            credential: 'vCNtTXqhnEYquavX'
           },
           {
             urls: 'turns:global.relay.metered.ca:443?transport=tcp',
-            username: 'YOUR_USERNAME',
-            credential: 'YOUR_CREDENTIAL'
+            username: '62588f777bbaaf306ef3f17f',
+            credential: 'vCNtTXqhnEYquavX'
           }
         ],
         sdpSemantics: 'unified-plan'
@@ -669,8 +669,9 @@
     let isCancelled = false;
     let isSender = false;
 
-    const CHUNK_SIZE = 256 * 1024;
-    const BATCH_SIZE = 4 * 1024 * 1024;
+    // High speed optimized buffer and chunk sizes
+    const CHUNK_SIZE = 1024 * 1024; // 1 MB
+    const BATCH_SIZE = 8 * 1024 * 1024; // 8 MB
 
     let speedTracker = {
       lastTime: 0,
@@ -1008,7 +1009,8 @@
         }
       };
 
-      rawDataChannel.bufferedAmountLowThreshold = 4 * 1024 * 1024;
+      // Increased threshold to keep pipeline fully utilized
+      rawDataChannel.bufferedAmountLowThreshold = 8 * 1024 * 1024; // 8 MB
 
       let fileOffset = 0;
       speedTracker.lastTime = performance.now();
