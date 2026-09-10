@@ -35,8 +35,6 @@
       document.head.appendChild(fav);
     })();
   </script>
-  <!-- WebRTC Adapter ensures reliable cross-browser DataChannel support[cite: 6] -->
-  <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <style>
@@ -551,9 +549,13 @@
       }
     };
 
-    // Tuned for high-speed continuous transfer without stop-and-go gaps[cite: 15]
-    const CHUNK_SIZE = 64 * 1024;        // 64 KB per chunk[cite: 15]
-    const BUFFER_THRESHOLD = CHUNK_SIZE * 8; // 512 KB threshold[cite: 15]
+    // Tuned for maximum WebRTC DataChannel throughput and zero freezing
+    const CHUNK_SIZE = 64 * 1024;            // 64 KB per SCTP chunk (safe across all browsers)
+    const HIGH_WATER_MARK = 4 * 1024 * 1024; // 4 MB queue capacity - deep pipeline for max throughput
+    const LOW_WATER_MARK = 1 * 1024 * 1024;  // 1 MB resume threshold
+    const STALL_TIMEOUT_MS = 20000;          // if buffer doesn't drain in 20s, treat connection as dead
+    const FILE_ACK_TIMEOUT_MS = 15000;       // don't wait forever for receiver confirmation
+    const PROGRESS_THROTTLE_MS = 120;        // receiver -> sender progress ping rate
 
     let peer = null;
     let conn = null;
@@ -561,6 +563,8 @@
     let isSender = false;
     let wakeLock = null;
     let sessionCode = null;
+    let pendingFileAckResolve = null;
+    let lastProgressSentAt = 0;
 
     let fileQueue = [];
     let currentFileIndex = 0;
@@ -607,20 +611,36 @@
       };
     }
 
-    // Lightweight direct speed counter[cite: 15]
-    let transferStartTime = 0;
+    // High-Precision Rolling Speed Meter
+    let speedSamples = [];
+    let smoothedSpeed = 0;
 
     function resetSpeedMeter() {
-      transferStartTime = Date.now();
+      speedSamples = [];
+      smoothedSpeed = 0;
     }
 
     function calculateSpeed(transferred) {
-      if (!transferStartTime) return 0;
-      const elapsed = (Date.now() - transferStartTime) / 1000;
-      return elapsed > 0 ? transferred / elapsed : 0;
+      const now = performance.now();
+      speedSamples.push({ t: now, b: transferred });
+
+      // Keep sample window at 1.0s for instantaneous, jitter-free speed
+      while (speedSamples.length > 2 && now - speedSamples[0].t > 1000) {
+        speedSamples.shift();
+      }
+
+      if (speedSamples.length < 2) return smoothedSpeed;
+
+      const dt = (speedSamples[speedSamples.length - 1].t - speedSamples[0].t) / 1000;
+      const db = speedSamples[speedSamples.length - 1].b - speedSamples[0].b;
+      const currentRate = dt > 0 ? db / dt : 0;
+
+      // Exponential Moving Average filter
+      smoothedSpeed = smoothedSpeed === 0 ? currentRate : (smoothedSpeed * 0.65 + currentRate * 0.35);
+      return smoothedSpeed;
     }
 
-    // 60FPS UI rendering
+    // 60FPS Hardware-Accelerated UI Loop
     let uiState = {
       transferred: 0,
       total: 0,
@@ -687,6 +707,7 @@
       try {
         if ('wakeLock' in navigator) {
           wakeLock = await navigator.wakeLock.request('screen');
+          wakeLock.addEventListener('release', () => { wakeLock = null; });
         }
       } catch (_) {}
     }
@@ -697,6 +718,13 @@
         wakeLock = null;
       }
     }
+
+    // Re-acquire wake lock if the OS auto-released it (e.g. tab was backgrounded)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && !wakeLock && !isCancelled && (isSender ? conn : receiverMeta)) {
+        requestWakeLock();
+      }
+    });
 
     function showToast(message) {
       if (!els.toast) return;
@@ -753,6 +781,7 @@
       receiverBytes = 0;
       sessionCode = null;
       isSender = false;
+      pendingFileAckResolve = null;
       resetSpeedMeter();
 
       if (els.hiddenFileInput) els.hiddenFileInput.value = '';
@@ -1004,6 +1033,25 @@
         if (msg.type === 'TRANSFER_CANCEL') {
           showToast('Receiver cancelled transfer.');
           cancelAndReset();
+          return;
+        }
+
+        // Receiver reports its real, confirmed bytes-received count.
+        // The sender mirrors this number exactly, so both sides always
+        // show the identical progress and speed - no more racing ahead.
+        if (msg.type === 'PROGRESS') {
+          uiState.transferred = Math.min(msg.bytes || 0, uiState.total);
+          scheduleUiUpdate();
+          return;
+        }
+
+        // Receiver confirms it fully processed and saved the file.
+        if (msg.type === 'FILE_ACK') {
+          if (pendingFileAckResolve) {
+            pendingFileAckResolve();
+            pendingFileAckResolve = null;
+          }
+          return;
         }
       });
 
@@ -1074,22 +1122,58 @@
       beginNextFileInQueue();
     }
 
-    // High-performance smooth stream pipeline[cite: 15]
+    // Cancellation- and stall-aware drain wait. Resolves when the buffer
+    // drops below LOW_WATER_MARK, OR when the transfer is cancelled/closed,
+    // OR when the buffer hasn't moved at all for STALL_TIMEOUT_MS (dead
+    // connection) - this is what prevents the old infinite-freeze bug.
+    function waitForDrain(dc, shouldAbort) {
+      if (!dc || dc.bufferedAmount <= LOW_WATER_MARK) return Promise.resolve();
+      return new Promise((resolve) => {
+        let settled = false;
+        let lastBuffered = dc.bufferedAmount;
+        let lastChangeAt = performance.now();
+        let pollTimer = null;
+
+        function finish() {
+          if (settled) return;
+          settled = true;
+          if (pollTimer) clearInterval(pollTimer);
+          dc.removeEventListener('bufferedamountlow', finish);
+          resolve();
+        }
+
+        dc.addEventListener('bufferedamountlow', finish, { once: true });
+
+        pollTimer = setInterval(() => {
+          if (shouldAbort() || !dc || dc.bufferedAmount <= LOW_WATER_MARK) {
+            finish();
+            return;
+          }
+          if (dc.bufferedAmount !== lastBuffered) {
+            lastBuffered = dc.bufferedAmount;
+            lastChangeAt = performance.now();
+          } else if (performance.now() - lastChangeAt > STALL_TIMEOUT_MS) {
+            finish(); // buffer hasn't moved in 20s - give up waiting, caller will detect and abort
+          }
+        }, 30);
+      });
+    }
+
+    // High-Performance Stream Pipeline
     async function sendSingleFile(file) {
       if (!conn || !conn.open) return;
 
       const dc = conn.dataChannel || conn._dc;
       if (dc) {
-        dc.bufferedAmountLowThreshold = BUFFER_THRESHOLD; //[cite: 15]
+        dc.bufferedAmountLowThreshold = LOW_WATER_MARK;
       }
+      const shouldAbort = () => isCancelled || !conn || !conn.open;
 
-      // Smooth wait: only pause if the buffer fills up past threshold[cite: 15]
-      const waitForDrain = () => {
-        if (!dc || dc.bufferedAmount <= BUFFER_THRESHOLD) return Promise.resolve(); //[cite: 15]
-        return new Promise((resolve) => {
-          dc.addEventListener('bufferedamountlow', resolve, { once: true }); //[cite: 15]
-        });
-      };
+      // Set up the completion handshake before sending anything, so a
+      // FILE_ACK that arrives quickly can never be missed.
+      let ackResolveFn;
+      const ackPromise = new Promise((res) => { ackResolveFn = res; });
+      pendingFileAckResolve = ackResolveFn;
 
       // 1. Send metadata header
       conn.send(JSON.stringify({
@@ -1108,43 +1192,58 @@
 
       let offset = 0;
 
-      // 2. Stream chunks without stop-and-go gaps[cite: 15]
+      // 2. Continuous saturated chunk streaming
       while (offset < file.size) {
-        if (isCancelled || !conn || !conn.open) break;
+        if (shouldAbort()) break;
 
-        await waitForDrain(); //[cite: 15]
-
-        if (isCancelled || !conn || !conn.open) break;
+        // Apply backpressure once the queue reaches HIGH_WATER_MARK
+        if (dc && dc.bufferedAmount >= HIGH_WATER_MARK) {
+          await waitForDrain(dc, shouldAbort);
+          if (shouldAbort()) break;
+          if (dc.bufferedAmount >= HIGH_WATER_MARK) {
+            // Drain watchdog gave up: connection is stalled/dead, not just slow.
+            pendingFileAckResolve = null;
+            throw new Error('Connection stalled while sending ' + file.name);
+          }
+        }
 
         const end = Math.min(offset + CHUNK_SIZE, file.size);
         const slice = file.slice(offset, end);
-        const buffer = await slice.arrayBuffer(); //[cite: 15]
+        const buffer = await slice.arrayBuffer();
 
-        if (isCancelled || !conn || !conn.open) break;
+        if (shouldAbort()) break;
 
-        conn.send(buffer); //[cite: 15]
+        conn.send(buffer);
         offset = end;
-
-        uiState.transferred = offset;
-        scheduleUiUpdate();
+        // Note: no local progress write here. The channel is ordered and
+        // reliable, so the receiver's own byte count (echoed back via
+        // PROGRESS pings) is the single source of truth for both sides.
       }
 
-      // 3. Make sure all buffered data left the browser before ending
-      while (dc && dc.bufferedAmount > 0 && !isCancelled && conn && conn.open) {
-        await new Promise((r) => setTimeout(r, 20));
-      }
+      if (shouldAbort()) { pendingFileAckResolve = null; return; }
 
-      if (isCancelled || !conn || !conn.open) return;
-
-      // 4. Send completion signal
+      // 3. Signal completion. Order is guaranteed by the reliable channel,
+      // so this can be sent immediately without waiting for the buffer to
+      // fully empty first.
       conn.send(JSON.stringify({ type: 'FILE_END' }));
+
+      // 4. Wait for the receiver to confirm it actually saved the file,
+      // with a timeout so a lost ACK can never hang the queue forever.
+      await Promise.race([
+        ackPromise,
+        new Promise((r) => setTimeout(r, FILE_ACK_TIMEOUT_MS))
+      ]);
+      pendingFileAckResolve = null;
+
+      if (shouldAbort()) return;
+      uiState.transferred = file.size;
+      scheduleUiUpdate();
     }
 
     // RECEIVER ENTRY
     function initReceiverPeer() {
       if (peer && !peer.destroyed) return;
-      // Passing undefined ensures PeerJS cleanly creates an automatic ID[cite: 10, 14]
-      peer = new Peer(undefined, PEER_CONFIG);
+      peer = new Peer(PEER_CONFIG);
 
       peer.on('error', (err) => {
         console.error('Receiver peer error:', err);
@@ -1235,6 +1334,7 @@
             };
             receiverChunks = [];
             receiverBytes = 0;
+            lastProgressSentAt = 0;
             resetSpeedMeter();
 
             initTransferView(
@@ -1254,6 +1354,7 @@
             uiState.status = 'Delivered';
             scheduleUiUpdate();
 
+            // Zero-clone Blob creation & fast download trigger
             const blob = new Blob(receiverChunks, { type: receiverMeta.mime });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -1264,6 +1365,10 @@
             a.click();
             a.remove();
             setTimeout(() => URL.revokeObjectURL(url), 30000);
+
+            // Confirm to the sender that this file is fully saved, so it
+            // can safely move on to the next file (or finish the batch).
+            try { c.send(JSON.stringify({ type: 'FILE_ACK', size: receiverMeta.size })); } catch (_) {}
 
             receiverChunks = [];
             const isBatchFinished = receiverBatchIndex >= receiverBatchCount;
@@ -1282,21 +1387,20 @@
           return;
         }
 
-        // Safe binary chunk normalization for all mobile and desktop browsers[cite: 10]
+        // Zero-copy binary chunk collection
         if (receiverMeta) {
-          let chunkBuffer = null;
-          if (data instanceof ArrayBuffer) {
-            chunkBuffer = data; //[cite: 10]
-          } else if (ArrayBuffer.isView(data)) {
-            chunkBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength); //[cite: 10]
-          }
+          receiverChunks.push(data);
+          receiverBytes += data.byteLength;
 
-          if (chunkBuffer) {
-            receiverChunks.push(chunkBuffer); //[cite: 15]
-            receiverBytes += chunkBuffer.byteLength; //[cite: 15]
+          uiState.transferred = receiverBytes;
+          scheduleUiUpdate();
 
-            uiState.transferred = receiverBytes;
-            scheduleUiUpdate();
+          // Echo real, confirmed progress back to the sender (throttled),
+          // so both sides always display the exact same numbers.
+          const now = performance.now();
+          if (now - lastProgressSentAt >= PROGRESS_THROTTLE_MS) {
+            lastProgressSentAt = now;
+            try { c.send(JSON.stringify({ type: 'PROGRESS', bytes: receiverBytes })); } catch (_) {}
           }
         }
       });
