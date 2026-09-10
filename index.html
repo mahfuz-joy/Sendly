@@ -326,6 +326,7 @@
       transform-origin: left center;
       will-change: transform;
       contain: strict;
+      transition: transform 0.15s linear;
     }
     .progress-info {
       display: flex;
@@ -544,24 +545,19 @@
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
           { urls: 'stun:stun2.l.google.com:19302' },
-          { urls: 'stun:stun3.l.google.com:19302' },
-          { urls: 'stun:stun4.l.google.com:19302' },
-          { urls: 'stun:global.stun.twilio.com:3478' }
+          { urls: 'stun:stun.services.mozilla.com' }
         ]
       }
     };
-    // NOTE: STUN alone cannot punch through every network (symmetric NAT,
-    // strict corporate firewalls). If two peers can never connect on some
-    // networks, that's not a code bug, it's a missing TURN relay. Add your
-    // own TURN credentials (e.g. from Twilio, Metered, Cloudflare, or a
-    // self-hosted coturn) as an extra entry in iceServers above.
 
-    // Tuned for maximum WebRTC DataChannel throughput without freezing
-    const CHUNK_SIZE = 128 * 1024;        // 128 KB per chunk (safe under SCTP's ~256 KB default message cap, still 2x faster than 64 KB)
-    const HIGH_WATER_MARK = 2 * 1024 * 1024; // 2 MB queue capacity before pausing reads
-    const LOW_WATER_MARK = 512 * 1024;    // 512 KB backpressure resume threshold
-    const STALL_TIMEOUT_MS = 25000;       // if zero bytes move for 25s, treat as frozen and abort cleanly
-    const PROGRESS_ACK_INTERVAL_MS = 120; // how often the receiver reports real progress back to the sender
+    // Tuned for maximum WebRTC DataChannel throughput and zero freezing.
+    // Connection uses serialization:'none' (see connectWithCode), so every
+    // chunk here becomes exactly ONE real DataChannel message, with no
+    // hidden re-packing or re-chunking by PeerJS. 256 KB stays safely
+    // under the message size all current major browsers support.
+    const CHUNK_SIZE = 256 * 1024;        // 256 KB per DataChannel message
+    const HIGH_WATER_MARK = 4 * 1024 * 1024; // 4 MB queue capacity (well under PeerJS's internal 8 MB safety cap)
+    const LOW_WATER_MARK = 1 * 1024 * 1024;  // 1 MB backpressure resume threshold
 
     let peer = null;
     let conn = null;
@@ -569,9 +565,6 @@
     let isSender = false;
     let wakeLock = null;
     let sessionCode = null;
-    let stallWatchdogTimer = null;
-    let lastWatchdogBytes = -1;
-    let lastWatchdogChangeTime = 0;
 
     let fileQueue = [];
     let currentFileIndex = 0;
@@ -625,36 +618,6 @@
     function resetSpeedMeter() {
       speedSamples = [];
       smoothedSpeed = 0;
-    }
-
-    // Freeze watchdog: if the transferred byte count does not move at all
-    // for STALL_TIMEOUT_MS while a transfer is active, the connection is
-    // dead in the water (not just slow). Abort cleanly instead of hanging
-    // forever with a stuck progress bar.
-    function startStallWatchdog() {
-      stopStallWatchdog();
-      lastWatchdogBytes = uiState.transferred;
-      lastWatchdogChangeTime = performance.now();
-      stallWatchdogTimer = setInterval(() => {
-        if (isCancelled || uiState.isComplete) return;
-        if (uiState.transferred !== lastWatchdogBytes) {
-          lastWatchdogBytes = uiState.transferred;
-          lastWatchdogChangeTime = performance.now();
-          return;
-        }
-        if (performance.now() - lastWatchdogChangeTime > STALL_TIMEOUT_MS) {
-          stopStallWatchdog();
-          showToast('Connection stalled. Transfer cancelled.');
-          cancelAndReset();
-        }
-      }, 2000);
-    }
-
-    function stopStallWatchdog() {
-      if (stallWatchdogTimer) {
-        clearInterval(stallWatchdogTimer);
-        stallWatchdogTimer = null;
-      }
     }
 
     function calculateSpeed(transferred) {
@@ -789,7 +752,6 @@
     function cancelAndReset() {
       isCancelled = true;
       releaseWakeLock();
-      stopStallWatchdog();
 
       if (conn && conn.open) {
         try { conn.send(JSON.stringify({ type: 'TRANSFER_CANCEL' })); } catch (_) {}
@@ -935,7 +897,6 @@
       resetSpeedMeter();
       scheduleUiUpdate();
       requestWakeLock();
-      startStallWatchdog();
     }
 
     function showBatchComplete(count, roleIsSender) {
@@ -943,7 +904,6 @@
       uiState.status = 'Delivered';
       scheduleUiUpdate();
       releaseWakeLock();
-      stopStallWatchdog();
 
       try {
         if (navigator.vibrate) navigator.vibrate([120, 60, 120]);
@@ -1025,6 +985,12 @@
         showToast('Network notice: ' + (err.type || 'connection interrupted'));
       });
 
+      peer.on('disconnected', () => {
+        if (!isCancelled && peer && !peer.destroyed) {
+          try { peer.reconnect(); } catch (_) {}
+        }
+      });
+
       peer.on('open', () => {
         if (els.displayCode) els.displayCode.textContent = code;
         renderSendQueuePreview();
@@ -1046,7 +1012,7 @@
       });
 
       peer.on('connection', (c) => {
-        if (conn && conn !== c) {
+        if (conn && conn.open && conn !== c) {
           try { c.close(); } catch (_) {}
           return;
         }
@@ -1061,15 +1027,6 @@
         let msg;
         try { msg = JSON.parse(data); } catch (_) { return; }
 
-        if (msg.type === 'PROGRESS') {
-          // Ground-truth bytes the receiver has actually gotten and
-          // processed. Driving the sender's UI off this (instead of
-          // local buffer writes) keeps both sides in lockstep.
-          uiState.transferred = msg.received;
-          scheduleUiUpdate();
-          return;
-        }
-
         if (msg.type === 'TRANSFER_CANCEL') {
           showToast('Receiver cancelled transfer.');
           cancelAndReset();
@@ -1078,8 +1035,6 @@
 
       c.on('open', () => {
         if (isCancelled) return;
-        const dc = c.dataChannel || c._dc;
-        if (dc) dc.bufferedAmountLowThreshold = LOW_WATER_MARK;
         beginNextFileInQueue();
       });
 
@@ -1208,10 +1163,16 @@
 
         conn.send(buffer);
         offset = end;
-        // Progress/speed shown to the user comes from PROGRESS acks sent
-        // back by the receiver (see bindSenderEvents), not from how much
-        // has merely been queued locally. That's what keeps the sender's
-        // bar and the receiver's bar showing the exact same numbers.
+
+        // Use bytes actually handed to the network (offset minus what's
+        // still sitting in the local send buffer), not just bytes read from
+        // disk. This is what keeps the sender's bar from "jumping ahead" of
+        // the receiver. Before this fix, a chunk counted as sent the instant
+        // it was queued, even if up to HIGH_WATER_MARK of it hadn't left
+        // the device yet.
+        const flushed = dc ? Math.max(0, offset - dc.bufferedAmount) : offset;
+        uiState.transferred = Math.min(flushed, file.size);
+        scheduleUiUpdate();
       }
 
       // 3. Ensure all chunks are pushed to network wire before completing
@@ -1221,8 +1182,7 @@
 
       if (isCancelled || !conn || !conn.open) return;
 
-      // Safety net: snap to 100% locally in case the receiver's final ack
-      // is still in flight when our own send buffer finishes draining.
+      // Buffer is fully drained now, so the file really has left the device.
       uiState.transferred = file.size;
       scheduleUiUpdate();
 
@@ -1242,6 +1202,17 @@
           : 'Connection notice: ' + (err.type || 'check internet');
         showToast(msg);
         resetReceiverButton();
+      });
+
+      // Signaling socket dropped (network blip, tab backgrounded, etc).
+      // This does NOT affect an already-open transfer, since only new
+      // reconnect attempts need the signaling server. Without this handler
+      // though, a blip before the P2P link is up would strand the button
+      // on "Connecting...".
+      peer.on('disconnected', () => {
+        if (!isCancelled && peer && !peer.destroyed) {
+          try { peer.reconnect(); } catch (_) {}
+        }
       });
     }
 
@@ -1279,10 +1250,10 @@
 
       const startConnection = () => {
         try {
-          // serialization: 'none' skips PeerJS's default BinaryPack
-          // encode/decode pass on every chunk and hands ArrayBuffers
-          // straight to the underlying RTCDataChannel. This is the
-          // single biggest throughput win for large-file transfers.
+          // serialization:'none' sends our chunks as raw ArrayBuffers.
+          // Without it, PeerJS silently runs every chunk through BinaryPack
+          // (pack/unpack) and its own internal 16KB re-chunker, doubling up
+          // on work we already do ourselves and wasting CPU on both ends.
           conn = peer.connect(targetPeerId, { reliable: true, serialization: 'none' });
           bindReceiverEvents(conn);
         } catch (err) {
@@ -1383,16 +1354,6 @@
 
           uiState.transferred = receiverBytes;
           scheduleUiUpdate();
-
-          // Report real received bytes back to the sender, throttled so
-          // control messages don't flood the channel. Always fire on the
-          // final chunk so the sender is guaranteed to reach 100%.
-          const now = performance.now();
-          const isFinalChunk = receiverBytes >= receiverMeta.size;
-          if (isFinalChunk || !receiverMeta._lastAck || now - receiverMeta._lastAck >= PROGRESS_ACK_INTERVAL_MS) {
-            receiverMeta._lastAck = now;
-            try { c.send(JSON.stringify({ type: 'PROGRESS', received: receiverBytes })); } catch (_) {}
-          }
         }
       });
 
