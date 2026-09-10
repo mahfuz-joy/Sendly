@@ -544,18 +544,51 @@
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
           { urls: 'stun:stun2.l.google.com:19302' },
-          { urls: 'stun:stun.services.mozilla.com' }
+          { urls: 'stun:stun.services.mozilla.com' },
+          // Free shared TURN relay (Open Relay Project / Metered). Without a
+          // TURN fallback, two devices behind strict/symmetric NAT (very
+          // common on mobile data and some corporate WiFi) can fail to
+          // establish a direct P2P link at all - that shows up as "stuck on
+          // Connecting..." with no error. This is a shared, rate-limited
+          // public relay meant for exactly this kind of use. For guaranteed
+          // reliability, grab your own free TURN key (20GB/month free) at
+          // https://www.metered.ca/tools/openrelay and swap the credentials
+          // below, or point this at your own coturn server.
+          {
+            urls: 'turn:openrelay.metered.ca:80',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          },
+          {
+            urls: 'turn:openrelay.metered.ca:443',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          },
+          {
+            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          }
         ]
       }
     };
 
     // Tuned for maximum WebRTC DataChannel throughput and zero freezing
-    const CHUNK_SIZE = 64 * 1024;            // 64 KB per SCTP chunk (safe across all browsers)
+    const MIN_CHUNK_SIZE = 16 * 1024;        // 16 KB floor - safe on every browser/device
+    const DEFAULT_CHUNK_SIZE = 64 * 1024;    // 64 KB - safe cross-browser default until negotiated
+    const MAX_CHUNK_SIZE = 256 * 1024;       // 256 KB ceiling - modern browsers only
+    let CHUNK_SIZE = DEFAULT_CHUNK_SIZE;     // actual value set per-connection, see negotiateChunkSize()
     const HIGH_WATER_MARK = 4 * 1024 * 1024; // 4 MB queue capacity - deep pipeline for max throughput
     const LOW_WATER_MARK = 1 * 1024 * 1024;  // 1 MB resume threshold
-    const STALL_TIMEOUT_MS = 20000;          // if buffer doesn't drain in 20s, treat connection as dead
-    const FILE_ACK_TIMEOUT_MS = 15000;       // don't wait forever for receiver confirmation
-    const PROGRESS_THROTTLE_MS = 120;        // receiver -> sender progress ping rate
+    const STALL_TIMEOUT_MS = 10000;          // if buffer doesn't drain in 10s, treat connection as dead
+    const FILE_ACK_TIMEOUT_MS = 12000;       // don't wait forever for receiver confirmation
+    const PROGRESS_THROTTLE_MS = 100;        // receiver -> sender progress ping rate
+
+    // Reconnection tuning - what turns a dropped WiFi/cellular handoff into
+    // a brief pause instead of a dead transfer.
+    const MAX_RECONNECT_ATTEMPTS = 5;
+    const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 6000, 8000];
+    const SENDER_RECONNECT_WINDOW_MS = 30000; // how long the sender waits for the receiver to redial
 
     let peer = null;
     let conn = null;
@@ -565,6 +598,17 @@
     let sessionCode = null;
     let pendingFileAckResolve = null;
     let lastProgressSentAt = 0;
+    let isReconnecting = false;
+    let reconnectAttempts = 0;
+    let reconnectTimer = null;
+    let reconnectGiveUpTimer = null;
+    let hasConnectedOnce = false;
+    // True only once the WHOLE batch is done (showBatchComplete ran) - not
+    // to be confused with uiState.isComplete, which also flashes true for a
+    // moment after each individual file in a multi-file batch. Reconnect
+    // logic must key off this one so it doesn't mistake "file 1 of 3 just
+    // finished" for "nothing left to do".
+    let batchFullyDone = false;
 
     let fileQueue = [];
     let currentFileIndex = 0;
@@ -576,6 +620,31 @@
     let receiverBytes = 0;
     let receiverBatchCount = 1;
     let receiverBatchIndex = 0;
+
+    // Reads the SCTP association's actual negotiated max message size (once
+    // the connection is open) and raises CHUNK_SIZE up to it, capped at
+    // MAX_CHUNK_SIZE. Falls back to the safe default if unavailable so this
+    // can never push an unsafe size. Bigger chunks where the browser pair
+    // supports them = fewer messages for the same bytes = more throughput.
+    function negotiateChunkSize(c) {
+      try {
+        const pc = c && c.peerConnection;
+        const maxMsg = pc && pc.sctp && pc.sctp.maxMessageSize;
+        if (maxMsg && isFinite(maxMsg) && maxMsg > 0) {
+          const safe = Math.min(maxMsg - 2048, MAX_CHUNK_SIZE);
+          CHUNK_SIZE = Math.max(MIN_CHUNK_SIZE, safe);
+        } else {
+          CHUNK_SIZE = DEFAULT_CHUNK_SIZE;
+        }
+      } catch (_) {
+        CHUNK_SIZE = DEFAULT_CHUNK_SIZE;
+      }
+    }
+
+    function clearReconnectTimers() {
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      if (reconnectGiveUpTimer) { clearTimeout(reconnectGiveUpTimer); reconnectGiveUpTimer = null; }
+    }
 
     // Cached DOM Elements
     let els = {};
@@ -760,6 +829,11 @@
     function cancelAndReset() {
       isCancelled = true;
       releaseWakeLock();
+      clearReconnectTimers();
+      isReconnecting = false;
+      reconnectAttempts = 0;
+      hasConnectedOnce = false;
+      batchFullyDone = false;
 
       if (conn && conn.open) {
         try { conn.send(JSON.stringify({ type: 'TRANSFER_CANCEL' })); } catch (_) {}
@@ -909,6 +983,7 @@
     }
 
     function showBatchComplete(count, roleIsSender) {
+      batchFullyDone = true;
       uiState.isComplete = true;
       uiState.status = 'Delivered';
       scheduleUiUpdate();
@@ -961,6 +1036,7 @@
       if (!files.length) return;
 
       isCancelled = false;
+      batchFullyDone = false;
 
       if (conn && conn.open) {
         fileQueue = files;
@@ -994,6 +1070,15 @@
         showToast('Network notice: ' + (err.type || 'connection interrupted'));
       });
 
+      peer.on('disconnected', () => {
+        // Lost touch with the signaling server (not the P2P link itself).
+        // Reconnecting here keeps the same peer ID alive so the receiver's
+        // code/QR/link stays valid.
+        if (!isCancelled && peer && !peer.destroyed) {
+          try { peer.reconnect(); } catch (_) {}
+        }
+      });
+
       peer.on('open', () => {
         if (els.displayCode) els.displayCode.textContent = code;
         renderSendQueuePreview();
@@ -1015,12 +1100,23 @@
       });
 
       peer.on('connection', (c) => {
-        if (conn && conn !== c) {
+        // Reject a genuinely duplicate connection attempt while one is
+        // already live, but DO accept a new one when the previous
+        // connection has died - that's the receiver redialing after a
+        // network drop, and is exactly what lets a transfer recover
+        // instead of freezing.
+        if (conn && conn.open) {
           try { c.close(); } catch (_) {}
           return;
         }
+        const wasReconnecting = isReconnecting;
+        clearReconnectTimers();
+        isReconnecting = false;
         conn = c;
         bindSenderEvents(conn);
+        if (wasReconnecting) {
+          showToast('Reconnected. Resuming transfer...');
+        }
       });
     }
 
@@ -1057,22 +1153,42 @@
 
       c.on('open', () => {
         if (isCancelled) return;
+        clearReconnectTimers();
+        isReconnecting = false;
+        negotiateChunkSize(c);
         beginNextFileInQueue();
       });
 
       c.on('close', () => {
-        if (!isCancelled) {
-          showToast('Connection closed.');
-          cancelAndReset();
-        }
+        if (isCancelled) return;
+        handleSenderConnDrop();
       });
 
-      c.on('error', () => {
-        if (!isCancelled) {
-          showToast('Transfer interrupted.');
+      c.on('error', (err) => {
+        console.error('Sender connection error:', err);
+        if (isCancelled) return;
+        handleSenderConnDrop();
+      });
+    }
+
+    // A drop mid-transfer (network handoff, brief signal loss, etc). Rather
+    // than killing the whole batch, keep the peer alive and give the
+    // receiver a window to redial - peer.on('connection') above will accept
+    // it and resume. If nobody reconnects in time, give up cleanly.
+    function handleSenderConnDrop() {
+      if (isCancelled || batchFullyDone || isReconnecting) return;
+      isReconnecting = true;
+      uiState.status = 'Connection lost. Waiting to reconnect...';
+      scheduleUiUpdate();
+      showToast('Connection interrupted. Waiting for the other device...');
+
+      clearReconnectTimers();
+      reconnectGiveUpTimer = setTimeout(() => {
+        if (isReconnecting && !isCancelled) {
+          showToast('Could not reconnect in time.');
           cancelAndReset();
         }
-      });
+      }, SENDER_RECONNECT_WINDOW_MS);
     }
 
     // SENDER FILE QUEUE
@@ -1082,6 +1198,7 @@
       if (!conn.open) {
         await new Promise((resolve) => conn.once('open', resolve));
       }
+      if (isCancelled) return;
 
       if (currentFileIndex === 0) {
         try {
@@ -1105,19 +1222,29 @@
         currentBatchTotal
       );
 
+      let completed = false;
       try {
-        await sendSingleFile(file);
+        completed = await sendSingleFile(file);
       } catch (err) {
         console.error('Send error:', err);
         if (!isCancelled) {
           uiState.status = 'Transfer error.';
           scheduleUiUpdate();
           showToast('Failed to send ' + file.name);
-          return;
         }
+        return;
       }
 
       if (isCancelled) return;
+
+      if (!completed) {
+        // The connection dropped before this file finished. Don't advance -
+        // the reconnect flow (handleSenderConnDrop / peer.on('connection'))
+        // will either restart this exact file once the link is back, or
+        // give up and reset after the reconnect window closes.
+        return;
+      }
+
       currentFileIndex++;
       beginNextFileInQueue();
     }
@@ -1125,7 +1252,8 @@
     // Cancellation- and stall-aware drain wait. Resolves when the buffer
     // drops below LOW_WATER_MARK, OR when the transfer is cancelled/closed,
     // OR when the buffer hasn't moved at all for STALL_TIMEOUT_MS (dead
-    // connection) - this is what prevents the old infinite-freeze bug.
+    // connection) - this is what prevents the transfer from freezing
+    // forever on a connection that looks open but silently died.
     function waitForDrain(dc, shouldAbort) {
       if (!dc || dc.bufferedAmount <= LOW_WATER_MARK) return Promise.resolve();
       return new Promise((resolve) => {
@@ -1153,19 +1281,24 @@
             lastBuffered = dc.bufferedAmount;
             lastChangeAt = performance.now();
           } else if (performance.now() - lastChangeAt > STALL_TIMEOUT_MS) {
-            finish(); // buffer hasn't moved in 20s - give up waiting, caller will detect and abort
+            finish(); // buffer hasn't moved - give up waiting, caller will detect and abort
           }
         }, 30);
       });
     }
 
     // High-Performance Stream Pipeline
+    // Returns true only when the file was fully sent AND the receiver's
+    // completion signal was waited on. Returns false for every abort path
+    // (cancelled, connection dropped, stalled) so the caller never mistakes
+    // an interrupted send for a completed one.
     async function sendSingleFile(file) {
-      if (!conn || !conn.open) return;
+      if (!conn || !conn.open) return false;
 
       const dc = conn.dataChannel || conn._dc;
       if (dc) {
         dc.bufferedAmountLowThreshold = LOW_WATER_MARK;
+        try { dc.binaryType = 'arraybuffer'; } catch (_) {}
       }
       const shouldAbort = () => isCancelled || !conn || !conn.open;
 
@@ -1176,12 +1309,17 @@
       pendingFileAckResolve = ackResolveFn;
 
       // 1. Send metadata header
-      conn.send(JSON.stringify({
-        type: 'FILE_START',
-        name: file.name,
-        size: file.size,
-        mime: file.type || 'application/octet-stream'
-      }));
+      try {
+        conn.send(JSON.stringify({
+          type: 'FILE_START',
+          name: file.name,
+          size: file.size,
+          mime: file.type || 'application/octet-stream'
+        }));
+      } catch (_) {
+        pendingFileAckResolve = null;
+        return false;
+      }
 
       uiState.status = 'Sending file...';
       uiState.transferred = 0;
@@ -1194,16 +1332,20 @@
 
       // 2. Continuous saturated chunk streaming
       while (offset < file.size) {
-        if (shouldAbort()) break;
+        if (shouldAbort()) { pendingFileAckResolve = null; return false; }
 
         // Apply backpressure once the queue reaches HIGH_WATER_MARK
         if (dc && dc.bufferedAmount >= HIGH_WATER_MARK) {
           await waitForDrain(dc, shouldAbort);
-          if (shouldAbort()) break;
+          if (shouldAbort()) { pendingFileAckResolve = null; return false; }
           if (dc.bufferedAmount >= HIGH_WATER_MARK) {
-            // Drain watchdog gave up: connection is stalled/dead, not just slow.
+            // Drain watchdog gave up: connection is stalled/dead, not just
+            // slow. Force-close it so the normal close handler takes over
+            // and tries to reconnect, instead of leaving a zombie
+            // connection that looks open but never delivers another byte.
             pendingFileAckResolve = null;
-            throw new Error('Connection stalled while sending ' + file.name);
+            try { conn.close(); } catch (_) {}
+            return false;
           }
         }
 
@@ -1211,21 +1353,31 @@
         const slice = file.slice(offset, end);
         const buffer = await slice.arrayBuffer();
 
-        if (shouldAbort()) break;
+        if (shouldAbort()) { pendingFileAckResolve = null; return false; }
 
-        conn.send(buffer);
+        try {
+          conn.send(buffer);
+        } catch (_) {
+          pendingFileAckResolve = null;
+          return false;
+        }
         offset = end;
         // Note: no local progress write here. The channel is ordered and
         // reliable, so the receiver's own byte count (echoed back via
         // PROGRESS pings) is the single source of truth for both sides.
       }
 
-      if (shouldAbort()) { pendingFileAckResolve = null; return; }
+      if (shouldAbort()) { pendingFileAckResolve = null; return false; }
 
       // 3. Signal completion. Order is guaranteed by the reliable channel,
       // so this can be sent immediately without waiting for the buffer to
       // fully empty first.
-      conn.send(JSON.stringify({ type: 'FILE_END' }));
+      try {
+        conn.send(JSON.stringify({ type: 'FILE_END' }));
+      } catch (_) {
+        pendingFileAckResolve = null;
+        return false;
+      }
 
       // 4. Wait for the receiver to confirm it actually saved the file,
       // with a timeout so a lost ACK can never hang the queue forever.
@@ -1235,9 +1387,10 @@
       ]);
       pendingFileAckResolve = null;
 
-      if (shouldAbort()) return;
+      if (shouldAbort()) return false;
       uiState.transferred = file.size;
       scheduleUiUpdate();
+      return true;
     }
 
     // RECEIVER ENTRY
@@ -1252,6 +1405,13 @@
           : 'Connection notice: ' + (err.type || 'check internet');
         showToast(msg);
         resetReceiverButton();
+      });
+
+      peer.on('disconnected', () => {
+        // Lost touch with the signaling server (not the P2P link itself).
+        if (!isCancelled && peer && !peer.destroyed) {
+          try { peer.reconnect(); } catch (_) {}
+        }
       });
     }
 
@@ -1275,6 +1435,9 @@
       isCancelled = false;
       isSender = false;
       sessionCode = targetCode;
+      hasConnectedOnce = false;
+      reconnectAttempts = 0;
+      batchFullyDone = false;
 
       const targetPeerId = 'sendly-' + targetCode;
       const btn = els.btnConnect || document.getElementById('btn-connect');
@@ -1309,6 +1472,14 @@
     function bindReceiverEvents(c) {
       c.on('open', () => {
         if (isCancelled) return;
+        clearReconnectTimers();
+        hasConnectedOnce = true;
+        reconnectAttempts = 0;
+        isReconnecting = false;
+        const dc = c.dataChannel || c._dc;
+        if (dc) {
+          try { dc.binaryType = 'arraybuffer'; } catch (_) {}
+        }
       });
 
       c.on('data', (data) => {
@@ -1407,16 +1578,65 @@
 
       c.on('error', (err) => {
         console.error('Connection error:', err);
-        showToast('Connection issue encountered.');
-        resetReceiverButton();
+        if (isCancelled) return;
+        if (!hasConnectedOnce) {
+          // Never actually connected - a bad code or offline sender, not a
+          // drop. Fail fast instead of spending ~20s retrying a connection
+          // that was never going to work.
+          showToast('Connection issue encountered.');
+          resetReceiverButton();
+          return;
+        }
+        attemptReceiverReconnect();
       });
 
       c.on('close', () => {
-        if (!isCancelled) {
-          showToast('Transfer session closed.');
-          cancelAndReset();
+        if (isCancelled) return;
+        if (!hasConnectedOnce) {
+          showToast('Connection failed. Please retry.');
+          resetReceiverButton();
+          return;
         }
+        attemptReceiverReconnect();
       });
+    }
+
+    // Redials the sender after an unexpected drop, with backoff, instead of
+    // ending the transfer on the first network blip. The sender's peer
+    // stays alive listening, so a fresh connect() here is enough to resume -
+    // FILE_START for the in-progress file naturally restarts it cleanly.
+    function attemptReceiverReconnect() {
+      if (isCancelled || batchFullyDone || isReconnecting) return;
+      if (!sessionCode || !peer || peer.destroyed) return;
+
+      if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        showToast('Connection lost. Please start the transfer again.');
+        cancelAndReset();
+        return;
+      }
+
+      isReconnecting = true;
+      const attemptNum = reconnectAttempts + 1;
+      uiState.status = `Reconnecting... (${attemptNum}/${MAX_RECONNECT_ATTEMPTS})`;
+      scheduleUiUpdate();
+      if (attemptNum === 1) showToast('Connection interrupted. Reconnecting...');
+
+      const delay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempts, RECONNECT_DELAYS_MS.length - 1)];
+      reconnectAttempts++;
+
+      clearReconnectTimers();
+      reconnectTimer = setTimeout(() => {
+        if (isCancelled || !peer || peer.destroyed) return;
+        try {
+          const targetPeerId = 'sendly-' + sessionCode;
+          const c = peer.connect(targetPeerId, { reliable: true });
+          conn = c;
+          bindReceiverEvents(c);
+        } catch (_) {
+          isReconnecting = false;
+          attemptReceiverReconnect();
+        }
+      }, delay);
     }
 
     // Direct link auto-open (?code=123456)
