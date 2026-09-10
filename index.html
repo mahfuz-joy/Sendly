@@ -326,7 +326,6 @@
       transform-origin: left center;
       will-change: transform;
       contain: strict;
-      transition: transform 0.15s linear;
     }
     .progress-info {
       display: flex;
@@ -550,14 +549,13 @@
       }
     };
 
-    // Tuned for maximum WebRTC DataChannel throughput and zero freezing.
-    // Connection uses serialization:'none' (see connectWithCode), so every
-    // chunk here becomes exactly ONE real DataChannel message, with no
-    // hidden re-packing or re-chunking by PeerJS. 256 KB stays safely
-    // under the message size all current major browsers support.
-    const CHUNK_SIZE = 256 * 1024;        // 256 KB per DataChannel message
-    const HIGH_WATER_MARK = 4 * 1024 * 1024; // 4 MB queue capacity (well under PeerJS's internal 8 MB safety cap)
-    const LOW_WATER_MARK = 1 * 1024 * 1024;  // 1 MB backpressure resume threshold
+    // Tuned for maximum WebRTC DataChannel throughput and zero freezing
+    const CHUNK_SIZE = 64 * 1024;            // 64 KB per SCTP chunk (safe across all browsers)
+    const HIGH_WATER_MARK = 4 * 1024 * 1024; // 4 MB queue capacity - deep pipeline for max throughput
+    const LOW_WATER_MARK = 1 * 1024 * 1024;  // 1 MB resume threshold
+    const STALL_TIMEOUT_MS = 20000;          // if buffer doesn't drain in 20s, treat connection as dead
+    const FILE_ACK_TIMEOUT_MS = 15000;       // don't wait forever for receiver confirmation
+    const PROGRESS_THROTTLE_MS = 120;        // receiver -> sender progress ping rate
 
     let peer = null;
     let conn = null;
@@ -565,6 +563,8 @@
     let isSender = false;
     let wakeLock = null;
     let sessionCode = null;
+    let pendingFileAckResolve = null;
+    let lastProgressSentAt = 0;
 
     let fileQueue = [];
     let currentFileIndex = 0;
@@ -707,6 +707,7 @@
       try {
         if ('wakeLock' in navigator) {
           wakeLock = await navigator.wakeLock.request('screen');
+          wakeLock.addEventListener('release', () => { wakeLock = null; });
         }
       } catch (_) {}
     }
@@ -717,6 +718,13 @@
         wakeLock = null;
       }
     }
+
+    // Re-acquire wake lock if the OS auto-released it (e.g. tab was backgrounded)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && !wakeLock && !isCancelled && (isSender ? conn : receiverMeta)) {
+        requestWakeLock();
+      }
+    });
 
     function showToast(message) {
       if (!els.toast) return;
@@ -773,6 +781,7 @@
       receiverBytes = 0;
       sessionCode = null;
       isSender = false;
+      pendingFileAckResolve = null;
       resetSpeedMeter();
 
       if (els.hiddenFileInput) els.hiddenFileInput.value = '';
@@ -985,12 +994,6 @@
         showToast('Network notice: ' + (err.type || 'connection interrupted'));
       });
 
-      peer.on('disconnected', () => {
-        if (!isCancelled && peer && !peer.destroyed) {
-          try { peer.reconnect(); } catch (_) {}
-        }
-      });
-
       peer.on('open', () => {
         if (els.displayCode) els.displayCode.textContent = code;
         renderSendQueuePreview();
@@ -1012,7 +1015,7 @@
       });
 
       peer.on('connection', (c) => {
-        if (conn && conn.open && conn !== c) {
+        if (conn && conn !== c) {
           try { c.close(); } catch (_) {}
           return;
         }
@@ -1030,6 +1033,25 @@
         if (msg.type === 'TRANSFER_CANCEL') {
           showToast('Receiver cancelled transfer.');
           cancelAndReset();
+          return;
+        }
+
+        // Receiver reports its real, confirmed bytes-received count.
+        // The sender mirrors this number exactly, so both sides always
+        // show the identical progress and speed - no more racing ahead.
+        if (msg.type === 'PROGRESS') {
+          uiState.transferred = Math.min(msg.bytes || 0, uiState.total);
+          scheduleUiUpdate();
+          return;
+        }
+
+        // Receiver confirms it fully processed and saved the file.
+        if (msg.type === 'FILE_ACK') {
+          if (pendingFileAckResolve) {
+            pendingFileAckResolve();
+            pendingFileAckResolve = null;
+          }
+          return;
         }
       });
 
@@ -1100,6 +1122,43 @@
       beginNextFileInQueue();
     }
 
+    // Cancellation- and stall-aware drain wait. Resolves when the buffer
+    // drops below LOW_WATER_MARK, OR when the transfer is cancelled/closed,
+    // OR when the buffer hasn't moved at all for STALL_TIMEOUT_MS (dead
+    // connection) - this is what prevents the old infinite-freeze bug.
+    function waitForDrain(dc, shouldAbort) {
+      if (!dc || dc.bufferedAmount <= LOW_WATER_MARK) return Promise.resolve();
+      return new Promise((resolve) => {
+        let settled = false;
+        let lastBuffered = dc.bufferedAmount;
+        let lastChangeAt = performance.now();
+        let pollTimer = null;
+
+        function finish() {
+          if (settled) return;
+          settled = true;
+          if (pollTimer) clearInterval(pollTimer);
+          dc.removeEventListener('bufferedamountlow', finish);
+          resolve();
+        }
+
+        dc.addEventListener('bufferedamountlow', finish, { once: true });
+
+        pollTimer = setInterval(() => {
+          if (shouldAbort() || !dc || dc.bufferedAmount <= LOW_WATER_MARK) {
+            finish();
+            return;
+          }
+          if (dc.bufferedAmount !== lastBuffered) {
+            lastBuffered = dc.bufferedAmount;
+            lastChangeAt = performance.now();
+          } else if (performance.now() - lastChangeAt > STALL_TIMEOUT_MS) {
+            finish(); // buffer hasn't moved in 20s - give up waiting, caller will detect and abort
+          }
+        }, 30);
+      });
+    }
+
     // High-Performance Stream Pipeline
     async function sendSingleFile(file) {
       if (!conn || !conn.open) return;
@@ -1108,25 +1167,13 @@
       if (dc) {
         dc.bufferedAmountLowThreshold = LOW_WATER_MARK;
       }
+      const shouldAbort = () => isCancelled || !conn || !conn.open;
 
-      function waitForDrain() {
-        if (!dc || dc.bufferedAmount <= LOW_WATER_MARK) return Promise.resolve();
-        return new Promise((resolve) => {
-          let checkTimer = null;
-          function onLow() {
-            if (checkTimer) clearInterval(checkTimer);
-            dc.removeEventListener('bufferedamountlow', onLow);
-            resolve();
-          }
-          dc.addEventListener('bufferedamountlow', onLow, { once: true });
-          // Safety guard: poll every 25ms to guarantee resume if event was fired
-          checkTimer = setInterval(() => {
-            if (!dc || dc.bufferedAmount <= LOW_WATER_MARK) {
-              onLow();
-            }
-          }, 25);
-        });
-      }
+      // Set up the completion handshake before sending anything, so a
+      // FILE_ACK that arrives quickly can never be missed.
+      let ackResolveFn;
+      const ackPromise = new Promise((res) => { ackResolveFn = res; });
+      pendingFileAckResolve = ackResolveFn;
 
       // 1. Send metadata header
       conn.send(JSON.stringify({
@@ -1147,47 +1194,50 @@
 
       // 2. Continuous saturated chunk streaming
       while (offset < file.size) {
-        if (isCancelled || !conn || !conn.open) break;
+        if (shouldAbort()) break;
 
-        // Apply backpressure when queue reaches 1 MB
+        // Apply backpressure once the queue reaches HIGH_WATER_MARK
         if (dc && dc.bufferedAmount >= HIGH_WATER_MARK) {
-          await waitForDrain();
-          if (isCancelled || !conn || !conn.open) break;
+          await waitForDrain(dc, shouldAbort);
+          if (shouldAbort()) break;
+          if (dc.bufferedAmount >= HIGH_WATER_MARK) {
+            // Drain watchdog gave up: connection is stalled/dead, not just slow.
+            pendingFileAckResolve = null;
+            throw new Error('Connection stalled while sending ' + file.name);
+          }
         }
 
         const end = Math.min(offset + CHUNK_SIZE, file.size);
         const slice = file.slice(offset, end);
         const buffer = await slice.arrayBuffer();
 
-        if (isCancelled || !conn || !conn.open) break;
+        if (shouldAbort()) break;
 
         conn.send(buffer);
         offset = end;
-
-        // Use bytes actually handed to the network (offset minus what's
-        // still sitting in the local send buffer), not just bytes read from
-        // disk. This is what keeps the sender's bar from "jumping ahead" of
-        // the receiver. Before this fix, a chunk counted as sent the instant
-        // it was queued, even if up to HIGH_WATER_MARK of it hadn't left
-        // the device yet.
-        const flushed = dc ? Math.max(0, offset - dc.bufferedAmount) : offset;
-        uiState.transferred = Math.min(flushed, file.size);
-        scheduleUiUpdate();
+        // Note: no local progress write here. The channel is ordered and
+        // reliable, so the receiver's own byte count (echoed back via
+        // PROGRESS pings) is the single source of truth for both sides.
       }
 
-      // 3. Ensure all chunks are pushed to network wire before completing
-      while (dc && dc.bufferedAmount > 0 && !isCancelled && conn && conn.open) {
-        await new Promise((r) => setTimeout(r, 20));
-      }
+      if (shouldAbort()) { pendingFileAckResolve = null; return; }
 
-      if (isCancelled || !conn || !conn.open) return;
+      // 3. Signal completion. Order is guaranteed by the reliable channel,
+      // so this can be sent immediately without waiting for the buffer to
+      // fully empty first.
+      conn.send(JSON.stringify({ type: 'FILE_END' }));
 
-      // Buffer is fully drained now, so the file really has left the device.
+      // 4. Wait for the receiver to confirm it actually saved the file,
+      // with a timeout so a lost ACK can never hang the queue forever.
+      await Promise.race([
+        ackPromise,
+        new Promise((r) => setTimeout(r, FILE_ACK_TIMEOUT_MS))
+      ]);
+      pendingFileAckResolve = null;
+
+      if (shouldAbort()) return;
       uiState.transferred = file.size;
       scheduleUiUpdate();
-
-      // 4. Send completion signal
-      conn.send(JSON.stringify({ type: 'FILE_END' }));
     }
 
     // RECEIVER ENTRY
@@ -1202,17 +1252,6 @@
           : 'Connection notice: ' + (err.type || 'check internet');
         showToast(msg);
         resetReceiverButton();
-      });
-
-      // Signaling socket dropped (network blip, tab backgrounded, etc).
-      // This does NOT affect an already-open transfer, since only new
-      // reconnect attempts need the signaling server. Without this handler
-      // though, a blip before the P2P link is up would strand the button
-      // on "Connecting...".
-      peer.on('disconnected', () => {
-        if (!isCancelled && peer && !peer.destroyed) {
-          try { peer.reconnect(); } catch (_) {}
-        }
       });
     }
 
@@ -1250,11 +1289,7 @@
 
       const startConnection = () => {
         try {
-          // serialization:'none' sends our chunks as raw ArrayBuffers.
-          // Without it, PeerJS silently runs every chunk through BinaryPack
-          // (pack/unpack) and its own internal 16KB re-chunker, doubling up
-          // on work we already do ourselves and wasting CPU on both ends.
-          conn = peer.connect(targetPeerId, { reliable: true, serialization: 'none' });
+          conn = peer.connect(targetPeerId, { reliable: true });
           bindReceiverEvents(conn);
         } catch (err) {
           console.error('Connect failed:', err);
@@ -1299,6 +1334,7 @@
             };
             receiverChunks = [];
             receiverBytes = 0;
+            lastProgressSentAt = 0;
             resetSpeedMeter();
 
             initTransferView(
@@ -1330,6 +1366,10 @@
             a.remove();
             setTimeout(() => URL.revokeObjectURL(url), 30000);
 
+            // Confirm to the sender that this file is fully saved, so it
+            // can safely move on to the next file (or finish the batch).
+            try { c.send(JSON.stringify({ type: 'FILE_ACK', size: receiverMeta.size })); } catch (_) {}
+
             receiverChunks = [];
             const isBatchFinished = receiverBatchIndex >= receiverBatchCount;
             receiverMeta = null;
@@ -1354,6 +1394,14 @@
 
           uiState.transferred = receiverBytes;
           scheduleUiUpdate();
+
+          // Echo real, confirmed progress back to the sender (throttled),
+          // so both sides always display the exact same numbers.
+          const now = performance.now();
+          if (now - lastProgressSentAt >= PROGRESS_THROTTLE_MS) {
+            lastProgressSentAt = now;
+            try { c.send(JSON.stringify({ type: 'PROGRESS', bytes: receiverBytes })); } catch (_) {}
+          }
         }
       });
 
